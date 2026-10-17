@@ -154,13 +154,30 @@
     gap: 1rem;
     margin-top: 1.25rem;
   }
+  #art { position: relative; width: 56px; height: 56px; flex: none; }
   #thumb {
     width: 56px; height: 56px;
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
     background: var(--surface-sunken);
-    flex: none;
   }
+  /* Real cover art from the Cover Art Archive fades over the mini-eq
+     thumbnail when a track is identified. Keeps the eq underneath as
+     the fallback (no image, offline, unmatched). */
+  #cover {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    opacity: 0;
+    transition: opacity 120ms var(--ease-standard);
+  }
+  #cover.shown { opacity: 1; }
+  .services { display: none; gap: 0.5rem; }
+  .services.shown { display: flex; }
+  a.icon-btn { text-decoration: none; }
   .track-info { min-width: 0; flex: 1; }
   #title {
     font-size: 1.125rem;
@@ -361,10 +378,23 @@
   </div>
 
   <div class="meta">
-    <canvas id="thumb" width="56" height="56" aria-hidden="true"></canvas>
+    <div id="art">
+      <canvas id="thumb" width="56" height="56" aria-hidden="true"></canvas>
+      <img id="cover" alt="">
+    </div>
     <div class="track-info">
       <div id="title">Nothing playing</div>
       <div id="artist">Pick a file to start the show</div>
+    </div>
+    <div id="services" class="services">
+      <a id="svc-spotify" class="icon-btn" target="_blank" rel="noopener"
+         aria-label="Search on Spotify" title="Search on Spotify">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/></svg>
+      </a>
+      <a id="svc-ytm" class="icon-btn" target="_blank" rel="noopener"
+         aria-label="Search on YouTube Music" title="Search on YouTube Music">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 19.104c-3.924 0-7.104-3.18-7.104-7.104S8.076 4.896 12 4.896s7.104 3.18 7.104 7.104-3.18 7.104-7.104 7.104zm0-13.332c-3.432 0-6.228 2.796-6.228 6.228S8.568 18.228 12 18.228s6.228-2.796 6.228-6.228S15.432 5.772 12 5.772zM9.684 15.54V8.46L15.816 12l-6.132 3.54z"/></svg>
+      </a>
     </div>
     <span id="live" class="live-badge"><span class="dot"></span>LIVE</span>
   </div>
@@ -433,6 +463,8 @@
   var micBtn = $('mic'), playBtn = $('play'), playIcon = $('play-icon');
   var modeBars = $('mode-bars'), modeWave = $('mode-wave');
   var volumeEl = $('volume'), fileInput = $('file');
+  var coverEl = $('cover'), servicesEl = $('services');
+  var svcSpotify = $('svc-spotify'), svcYtm = $('svc-ytm');
 
   var PLAY_PATH = 'M7 4.5v15l13-7.5z';
   var PAUSE_PATH = 'M6 4h4v16H6zM14 4h4v16h-4z';
@@ -499,6 +531,93 @@
     return { artist: 'Local file', title: base };
   }
 
+  // --- Track identification (MusicBrainz, keyless) ----------------------
+  // One search per loaded file. On a confident match, real cover art fades
+  // over the mini-eq and the service links use the matched names. Every
+  // failure path (offline, rate-limited, no match) keeps the eq art.
+  var idCache = Object.create(null);
+  var idToken = 0;
+  var lastLookup = 0;
+
+  function serviceLinks(artist, title) {
+    var q = encodeURIComponent((artist === 'Local file' ? '' : artist + ' ' + title).trim());
+    svcSpotify.href = 'https://open.spotify.com/search/' + q;
+    svcYtm.href = 'https://music.youtube.com/search?q=' + q;
+    servicesEl.classList.add('shown');
+  }
+
+  function pickRelease(releases) {
+    if (!releases || !releases.length) return null;
+    var candidates = releases.filter(function (r) {
+      if (r.status && r.status !== 'Official') return false;
+      return !/live|remix|bootleg|karaoke|tribute/i.test(r.title || '');
+    });
+    if (!candidates.length) candidates = releases.slice();
+    // Earliest date ≈ the original album, not a reissue.
+    candidates.sort(function (a, b) { return (a.date || '9999') < (b.date || '9999') ? -1 : 1; });
+    return candidates[0];
+  }
+
+  function pickMatch(recordings, artist, title) {
+    var haveArtist = artist !== 'Local file';
+    var fallback = null;
+    for (var i = 0; i < recordings.length; i++) {
+      var rec = recordings[i];
+      if ((rec.score || 0) < (haveArtist ? 90 : 95)) continue;
+      var credited = (rec['artist-credit'] || []).map(function (a) { return a.name; }).join(', ');
+      if (haveArtist && credited.toLowerCase().indexOf(artist.toLowerCase()) === -1) continue;
+      var rel = pickRelease(rec.releases);
+      var match = {
+        title: rec.title,
+        artist: credited,
+        cover: rel ? 'https://coverartarchive.org/release/' + rel.id + '/front-250' : null
+      };
+      if (match.cover) return match;   // first match with art wins
+      if (!fallback) fallback = match; // keep scanning — art beats metadata
+    }
+    return fallback;
+  }
+
+  function applyMatch(match, token) {
+    if (token !== idToken) return;   // a newer file loaded meanwhile
+    if (!match) return;
+    serviceLinks(match.artist, match.title);
+    if (!match.cover) return;
+    coverEl.onload = function () {
+      if (token === idToken) coverEl.classList.add('shown');
+    };
+    coverEl.src = match.cover;
+  }
+
+  function identifyTrack(artist, title, token) {
+    var key = artist + '\u0000' + title;
+    if (key in idCache) { applyMatch(idCache[key], token); return; }
+    // MusicBrainz asks for ≤1 request/second — space lookups out.
+    var wait = Math.max(0, 1100 - (Date.now() - lastLookup));
+    setTimeout(function () {
+      lastLookup = Date.now();
+      var query = haveArtistQuery(artist, title);
+      var ctrl = new AbortController();
+      var kill = setTimeout(function () { ctrl.abort(); }, 6000);
+      fetch('https://musicbrainz.org/ws/2/recording/?query=' + encodeURIComponent(query) +
+            '&fmt=json&limit=5&inc=releases', { signal: ctrl.signal })
+        .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+        .then(function (j) {
+          var m = pickMatch(j.recordings || [], artist, title);
+          idCache[key] = m;   // cache misses too — don't re-query known misses
+          applyMatch(m, token);
+        })
+        .catch(function () { /* offline / rate-limited / timeout: keep eq art */ })
+        .then(function () { clearTimeout(kill); });
+    }, wait);
+  }
+
+  function haveArtistQuery(artist, title) {
+    return artist === 'Local file'
+      ? 'recording:"' + title + '"'
+      : 'recording:"' + title + '" AND artist:"' + artist + '"';
+  }
+
   function loadFile(file) {
     ensureAudio();
     stopMic();
@@ -514,6 +633,11 @@
     hasFile = true;
     idle.classList.add('hidden');
     progressRow.classList.remove('hidden');
+    // Swap out the previous track's cover, offer the service links with the
+    // parsed names right away, then upgrade both when identification lands.
+    coverEl.classList.remove('shown');
+    serviceLinks(names.artist, names.title);
+    identifyTrack(names.artist, names.title, ++idToken);
     player.play().catch(function () {});
     setStatus('Now playing: ' + file.name);
     updatePlayIcon();
@@ -565,7 +689,11 @@
       stopMic();
       titleEl.textContent = hasFile ? titleEl.textContent : 'Nothing playing';
       artistEl.textContent = hasFile ? artistEl.textContent : 'Pick a file to start the show';
-      if (hasFile) progressRow.classList.remove('hidden');
+      if (hasFile) {
+        progressRow.classList.remove('hidden');
+        // Re-apply the track's identity (cache makes this instant when known).
+        identifyTrack(artistEl.textContent, titleEl.textContent, ++idToken);
+      }
       setStatus('Microphone off.');
       return;
     }
@@ -582,6 +710,9 @@
       liveEl.classList.add('shown');
       idle.classList.add('hidden');
       progressRow.classList.add('hidden');
+      coverEl.classList.remove('shown');
+      servicesEl.classList.remove('shown');
+      idToken++;   // discard any in-flight identification while live
       titleEl.textContent = 'Microphone';
       artistEl.textContent = 'Live input';
       setStatus('Listening — make some noise.');
