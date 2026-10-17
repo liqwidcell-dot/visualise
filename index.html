@@ -38,6 +38,7 @@
   }
 
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0;
     background: var(--surface-base);
@@ -45,166 +46,405 @@
     font-family: var(--font-sans);
     font-size: 15px;
     line-height: 1.6;
-    padding: 4rem 1.5rem;
+    padding: 3rem 1.5rem 4rem;
   }
-  .wrap { max-width: 46rem; margin: 0 auto; }
 
+  /* Beat drench: full-page tint, driven from the frame loop. */
+  #page-pulse {
+    position: fixed;
+    inset: 0;
+    background: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .wrap { max-width: 46rem; margin: 0 auto; position: relative; z-index: 1; }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .mark { display: flex; align-items: center; gap: 0.6rem; }
+  .mark-glyph {
+    width: 34px; height: 34px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--surface-raised);
+    display: grid; place-items: center;
+  }
+  .mark-glyph svg { display: block; }
   h1 {
-    font-size: 2rem;
+    font-size: 1.05rem;
     font-weight: 600;
     letter-spacing: -0.01em;
-    margin: 0 0 0.25rem;
+    margin: 0;
+    line-height: 1.2;
   }
-  .tagline { color: var(--text-secondary); margin: 0 0 3rem; }
+  .mark .sub { font-size: 0.75rem; color: var(--text-secondary); line-height: 1.2; }
 
-  .section-label {
-    font-size: 0.75rem;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--text-secondary);
-    margin: 0 0 0.75rem;
-  }
-
-  .controls {
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-    margin: 0 0 1rem;
-    flex-wrap: wrap;
-  }
   button {
-    background: var(--accent);
-    color: var(--on-accent);
     font-family: var(--font-sans);
     font-size: 15px;
+    cursor: pointer;
+    transition: filter 120ms var(--ease-standard),
+                color 120ms var(--ease-standard),
+                border-color 120ms var(--ease-standard);
+  }
+  button:focus-visible, select:focus-visible, .track:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .btn {
+    background: var(--accent);
+    color: var(--on-accent);
     font-weight: 600;
     border: none;
     border-radius: 6px;
     padding: 0.6rem 1.15rem;
-    cursor: pointer;
-    transition: filter 120ms var(--ease-standard);
   }
-  button:hover { filter: brightness(1.08); }
-  button:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
-  button.quiet {
+  .btn:hover { filter: brightness(1.08); }
+  .btn-quiet {
     background: transparent;
     color: var(--text-secondary);
     border: 1px solid var(--border-subtle);
-    font-weight: 400;
-    transition: color 120ms var(--ease-standard), border-color 120ms var(--ease-standard);
-  }
-  button.quiet:hover { color: var(--text-primary); border-color: var(--text-secondary); filter: none; }
-  button[aria-pressed="true"] {
-    color: var(--accent);
-    border-color: var(--accent);
-  }
-  select {
-    background: var(--surface-raised);
-    color: var(--text-primary);
-    border: 1px solid var(--border-subtle);
     border-radius: 6px;
-    padding: 0.55rem 0.75rem;
-    font-family: var(--font-sans);
-    font-size: 15px;
+    padding: 0.5rem 0.9rem;
+    font-weight: 400;
   }
-  select:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
-  }
+  .btn-quiet:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+  .btn-quiet[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 
-  .status {
-    color: var(--text-secondary);
-    font-size: 0.9375rem;
-    margin: 0 0 1rem;
-    min-height: 1.5em;
-  }
-  .status.error { color: var(--danger); }
-
+  /* --- Hero tile ------------------------------------------------------ */
   #panel {
+    position: relative;
     background: var(--surface-raised);
     border: 1px solid var(--border-subtle);
     border-radius: 8px;
     overflow: hidden;
+    aspect-ratio: 920 / 400;
     transition: border-color 120ms var(--ease-standard);
   }
   #panel.dragover { border-color: var(--accent); }
-  #viz { display: block; width: 100%; height: auto; }
+  #viz { display: block; width: 100%; height: 100%; }
+  #tile-pulse {
+    position: absolute; inset: 0;
+    background: var(--accent);
+    opacity: 0;
+    pointer-events: none;
+  }
+  #idle {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 0.75rem;
+    text-align: center;
+    padding: 1.5rem;
+  }
+  #idle.hidden { display: none; }
+  #idle p { margin: 0; color: var(--text-secondary); }
+  #idle .drop { font-size: 0.875rem; }
 
-  audio { display: block; width: 100%; margin-top: 1rem; }
-  audio:not([src]) { display: none; }
+  /* --- Now playing row ------------------------------------------------ */
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 1.25rem;
+  }
+  #thumb {
+    width: 56px; height: 56px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 8px;
+    background: var(--surface-sunken);
+    flex: none;
+  }
+  .track-info { min-width: 0; flex: 1; }
+  #title {
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1.35;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #artist {
+    font-size: 0.9375rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .live-badge {
+    display: none;
+    align-items: center;
+    gap: 0.4rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 0.25rem 0.55rem;
+    flex: none;
+  }
+  .live-badge.shown { display: inline-flex; }
+  .live-badge .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+
+  /* --- Progress ------------------------------------------------------- */
+  .progress-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+  }
+  .progress-row.hidden { visibility: hidden; height: 0; margin: 0; overflow: hidden; }
+  .time {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    width: 3.25rem;
+    flex: none;
+  }
+  .time.right { text-align: right; }
+  .track {
+    flex: 1;
+    height: 4px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: 2px;
+    position: relative;
+    cursor: pointer;
+  }
+  #fill {
+    position: absolute;
+    left: -1px; top: -1px; bottom: -1px;
+    width: 0;
+    background: var(--accent);
+    border-radius: 2px;
+    pointer-events: none;
+  }
+  #thumb-dot {
+    position: absolute;
+    top: 50%;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    transform: translate(-50%, -50%);
+    opacity: 0;
+    transition: opacity 120ms var(--ease-standard);
+    pointer-events: none;
+  }
+  .track:hover #thumb-dot, .track:focus-visible #thumb-dot { opacity: 1; }
+
+  /* --- Controls ------------------------------------------------------- */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    margin-top: 1rem;
+  }
+  .icon-btn {
+    width: 40px; height: 40px;
+    display: grid; place-items: center;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 50%;
+    color: var(--text-secondary);
+    padding: 0;
+  }
+  .icon-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+  .icon-btn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+  #play {
+    width: 48px; height: 48px;
+    background: var(--accent);
+    border: none;
+    border-radius: 50%;
+    color: var(--on-accent);
+    display: grid; place-items: center;
+    padding: 0;
+  }
+  #play:hover { filter: brightness(1.08); }
+  .volume {
+    display: flex; align-items: center; gap: 0.5rem;
+    color: var(--text-secondary);
+  }
+  .volume input[type="range"] {
+    width: 90px;
+    accent-color: var(--accent);
+  }
+  .spacer { flex: 1; }
+  .segmented {
+    display: inline-flex;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .segmented button {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    padding: 0.45rem 0.85rem;
+  }
+  .segmented button[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+  }
+  .segmented button + button { border-left: 1px solid var(--border-subtle); }
+
+  #status {
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    margin: 0.9rem 0 0;
+    min-height: 1.4em;
+  }
+  #status.error { color: var(--danger); }
 
   .hint {
     color: var(--text-secondary);
-    font-size: 0.9375rem;
-    margin: 1.5rem 0 0;
+    font-size: 0.875rem;
+    margin: 2rem 0 0;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 1rem;
   }
-  code {
+  kbd {
     font-family: var(--font-mono);
-    font-size: 0.875em;
+    font-size: 0.8em;
     background: var(--surface-sunken);
-    padding: 0.1em 0.35em;
+    border: 1px solid var(--border-subtle);
     border-radius: 4px;
+    padding: 0.05em 0.4em;
   }
   ::selection {
     background: color-mix(in oklab, var(--accent) 26%, transparent);
   }
+  audio { display: none; }
 </style>
 </head>
 <body>
+<div id="page-pulse"></div>
 <div class="wrap">
-  <h1>visualise</h1>
-  <p class="tagline">Turn sound into something you can see. Bars bounce, the wave wobbles, the ring kicks on the beat.</p>
-
-  <p class="section-label">Source</p>
-  <div class="controls">
-    <button id="pick">Choose a song</button>
+  <header>
+    <div class="mark">
+      <span class="mark-glyph" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" style="color: var(--accent)">
+          <rect x="1" y="6" width="3" height="4" rx="1.5"/>
+          <rect x="6.5" y="2" width="3" height="12" rx="1.5"/>
+          <rect x="12" y="5" width="3" height="6" rx="1.5"/>
+        </svg>
+      </span>
+      <div>
+        <h1>visualise</h1>
+        <div class="sub">sound, seen</div>
+      </div>
+    </div>
+    <button id="pick" class="btn-quiet">Choose a song</button>
     <input type="file" id="file" accept="audio/*" hidden>
-    <button id="mic" class="quiet" aria-pressed="false">Use microphone</button>
-    <select id="mode" aria-label="Visualisation">
-      <option value="bars">Bars</option>
-      <option value="wave">Waveform</option>
-    </select>
-  </div>
-  <p id="status" class="status" role="status">Pick a song (or drop one on the canvas), or listen through your microphone.</p>
+  </header>
 
   <div id="panel">
-    <canvas id="viz" width="920" height="380" aria-label="Audio visualisation"></canvas>
+    <canvas id="viz" aria-label="Audio visualisation"></canvas>
+    <div id="tile-pulse"></div>
+    <div id="idle">
+      <p><strong>Drop a song here</strong></p>
+      <button id="idle-pick" class="btn">Choose a song</button>
+      <p class="drop">or listen through your microphone</p>
+    </div>
   </div>
-  <audio id="player" controls></audio>
 
-  <p class="hint">The visuals come straight from the audio's FFT — any song works. Bass detection
-  flashes the ring; <code>smoothing</code> and easing keep it from jittering. Drop an audio file
-  anywhere on the canvas.</p>
+  <div class="meta">
+    <canvas id="thumb" width="56" height="56" aria-hidden="true"></canvas>
+    <div class="track-info">
+      <div id="title">Nothing playing</div>
+      <div id="artist">Pick a file to start the show</div>
+    </div>
+    <span id="live" class="live-badge"><span class="dot"></span>LIVE</span>
+  </div>
+
+  <div id="progress-row" class="progress-row hidden">
+    <span id="elapsed" class="time">0:00</span>
+    <div id="seek" class="track" role="slider" tabindex="0"
+         aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+      <div id="fill"></div>
+      <div id="thumb-dot"></div>
+    </div>
+    <span id="remaining" class="time right">0:00</span>
+  </div>
+
+  <div class="controls">
+    <button id="play" aria-label="Play">
+      <svg id="play-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7 4.5v15l13-7.5z"/>
+      </svg>
+    </button>
+    <button id="mic" class="icon-btn" aria-pressed="false" aria-label="Use microphone" title="Use microphone">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round">
+        <rect x="9" y="3" width="6" height="11" rx="3"/>
+        <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+      </svg>
+    </button>
+    <div class="volume" title="Volume">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M11 5 6 9H3v6h3l5 4V5zM15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>
+      </svg>
+      <input type="range" id="volume" min="0" max="1" step="0.01" value="0.9"
+             aria-label="Volume">
+    </div>
+    <div class="spacer"></div>
+    <div class="segmented" role="group" aria-label="Visualisation mode">
+      <button id="mode-bars" aria-pressed="true">Bars</button>
+      <button id="mode-wave" aria-pressed="false">Waveform</button>
+    </div>
+  </div>
+
+  <p id="status" role="status">Drop a file on the tile, or press play to choose one.</p>
+
+  <p class="hint">Any song works — the visuals come straight from the audio's FFT.
+  <kbd>Space</kbd> play · <kbd>←</kbd><kbd>→</kbd> seek · drag a file onto the tile.</p>
 </div>
+
+<audio id="player"></audio>
 
 <script>
 (function () {
-  var BAR_COUNT = 48;          // log-spaced frequency bars
-  var FFT_SIZE = 2048;         // 1024 bins
-  var SMOOTH_UP = 0.55;        // fast on the way up…
-  var SMOOTH_DOWN = 0.12;      // …slow on the way down
-  var BEAT_COOLDOWN = 180;     // ms between kick flashes
+  var BAR_COUNT = 48;
+  var SMOOTH_UP = 0.55;
+  var SMOOTH_DOWN = 0.12;
+  var BEAT_COOLDOWN = 180;
 
-  var canvas = document.getElementById('viz');
-  var c2d = canvas.getContext('2d');
-  var panel = document.getElementById('panel');
-  var statusEl = document.getElementById('status');
-  var player = document.getElementById('player');
-  var fileInput = document.getElementById('file');
-  var micBtn = document.getElementById('mic');
-  var modeEl = document.getElementById('mode');
+  var $ = function (id) { return document.getElementById(id); };
+  var canvas = $('viz'), c2d = canvas.getContext('2d');
+  var thumbCanvas = $('thumb'), t2d = thumbCanvas.getContext('2d');
+  var panel = $('panel'), idle = $('idle'), pagePulse = $('page-pulse'), tilePulse = $('tile-pulse');
+  var statusEl = $('status'), player = $('player');
+  var titleEl = $('title'), artistEl = $('artist'), liveEl = $('live');
+  var progressRow = $('progress-row'), seekEl = $('seek'), fillEl = $('fill'), dotEl = $('thumb-dot');
+  var elapsedEl = $('elapsed'), remainingEl = $('remaining');
+  var micBtn = $('mic'), playBtn = $('play'), playIcon = $('play-icon');
+  var modeBars = $('mode-bars'), modeWave = $('mode-wave');
+  var volumeEl = $('volume'), fileInput = $('file');
+
+  var PLAY_PATH = 'M7 4.5v15l13-7.5z';
+  var PAUSE_PATH = 'M6 4h4v16H6zM14 4h4v16h-4z';
 
   var audioCtx = null, analyser = null, fileSource = null;
   var micStream = null, micSource = null;
-  var bins = null, wave = null;
+  var bins = null, waveArr = null;
   var displayed = new Float32Array(BAR_COUNT);
+  var peaks = new Float32Array(BAR_COUNT);
   var beatHistory = [], lastBeat = 0;
-  var ring = { t: Infinity };   // beat ring progress, seconds
-  var objectUrl = null;
+  var ringT = Infinity;
+  var objectUrl = null, hasFile = false, mode = 'bars';
 
   var tokens = {};
   function refreshTokens() {
@@ -212,6 +452,14 @@
     ['surface-sunken', 'border-subtle', 'text-secondary', 'accent'].forEach(function (t) {
       tokens[t] = cs.getPropertyValue('--' + t).trim();
     });
+    tokens.rgb = hexToRgb(tokens.accent);
+  }
+  function hexToRgb(hex) {
+    var m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex);
+    if (!m) return '59,110,165';
+    var h = m[1];
+    if (h.length === 3) h = h.replace(/./g, function (c) { return c + c; });
+    return parseInt(h.slice(0, 2), 16) + ',' + parseInt(h.slice(2, 4), 16) + ',' + parseInt(h.slice(4, 6), 16);
   }
   refreshTokens();
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refreshTokens);
@@ -220,17 +468,19 @@
     statusEl.textContent = msg;
     statusEl.classList.toggle('error', !!isError);
   }
+  function alpha(a) { return 'rgba(' + tokens.rgb + ',' + a + ')'; }
 
-  // One AudioContext, created on first user gesture, reused forever.
+  // --- Audio graph ------------------------------------------------------
   function ensureAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       analyser = audioCtx.createAnalyser();
-      analyser.fftSize = FFT_SIZE;
+      analyser.fftSize = 2048;
       analyser.smoothingTimeConstant = 0.82;
       bins = new Uint8Array(analyser.frequencyBinCount);
-      wave = new Uint8Array(analyser.fftSize);
+      waveArr = new Uint8Array(analyser.fftSize);
       analyser.connect(audioCtx.destination);
+      player.volume = parseFloat(volumeEl.value);
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
   }
@@ -239,29 +489,65 @@
     if (micStream) { micStream.getTracks().forEach(function (t) { t.stop(); }); micStream = null; }
     if (micSource) { micSource.disconnect(); micSource = null; }
     micBtn.setAttribute('aria-pressed', 'false');
+    liveEl.classList.remove('shown');
+  }
+
+  function parseName(name) {
+    var base = name.replace(/\.[^.]+$/, '');
+    var dash = base.match(/^(.+?)\s+-\s+(.+)$/);
+    if (dash) return { artist: dash[1].trim(), title: dash[2].trim() };
+    return { artist: 'Local file', title: base };
   }
 
   function loadFile(file) {
     ensureAudio();
     stopMic();
     if (!fileSource) fileSource = audioCtx.createMediaElementSource(player);
-    // Re-hook: exactly one input feeds the analyser at a time.
     try { fileSource.disconnect(); } catch (e) {}
     fileSource.connect(analyser);
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(file);
     player.src = objectUrl;
+    var names = parseName(file.name);
+    titleEl.textContent = names.title;
+    artistEl.textContent = names.artist;
+    hasFile = true;
+    idle.classList.add('hidden');
+    progressRow.classList.remove('hidden');
     player.play().catch(function () {});
     setStatus('Now playing: ' + file.name);
+    updatePlayIcon();
   }
 
-  document.getElementById('pick').addEventListener('click', function () { fileInput.click(); });
+  function updatePlayIcon() {
+    var playing = !player.paused && hasFile;
+    playIcon.innerHTML = '<path d="' + (playing ? PAUSE_PATH : PLAY_PATH) + '"/>';
+    playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  }
+
+  function togglePlay() {
+    if (!hasFile) { fileInput.click(); return; }
+    ensureAudio();
+    if (micStream) {
+      // The mic owns the analyser — hand it back to the file, or the
+      // file would "play" silently.
+      stopMic();
+      if (fileSource) { try { fileSource.disconnect(); } catch (e) {} fileSource.connect(analyser); }
+    }
+    if (player.paused) player.play().catch(function () {});
+    else player.pause();
+    updatePlayIcon();
+  }
+
+  $('pick').addEventListener('click', function () { fileInput.click(); });
+  $('idle-pick').addEventListener('click', function () { fileInput.click(); });
   fileInput.addEventListener('change', function () {
     if (fileInput.files[0]) loadFile(fileInput.files[0]);
   });
-  player.addEventListener('play', function () { ensureAudio(); });
+  player.addEventListener('play', updatePlayIcon);
+  player.addEventListener('pause', updatePlayIcon);
 
-  // Drag & drop straight onto the canvas.
+  // Drag & drop on the tile.
   ['dragover', 'dragenter'].forEach(function (ev) {
     panel.addEventListener(ev, function (e) { e.preventDefault(); panel.classList.add('dragover'); });
   });
@@ -271,48 +557,112 @@
   panel.addEventListener('drop', function (e) {
     var f = e.dataTransfer.files && e.dataTransfer.files[0];
     if (f && f.type.indexOf('audio') === 0) loadFile(f);
-    else setStatus('That file is not audio.', true);
+    else if (f) setStatus('That file is not audio.', true);
   });
 
   micBtn.addEventListener('click', function () {
     if (micStream) {
       stopMic();
+      titleEl.textContent = hasFile ? titleEl.textContent : 'Nothing playing';
+      artistEl.textContent = hasFile ? artistEl.textContent : 'Pick a file to start the show';
+      if (hasFile) progressRow.classList.remove('hidden');
       setStatus('Microphone off.');
       return;
     }
     ensureAudio();
     player.pause();
+    updatePlayIcon();
     navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
       stopMic();
       if (fileSource) { try { fileSource.disconnect(); } catch (e) {} }
       micStream = stream;
       micSource = audioCtx.createMediaStreamSource(stream);
-      micSource.connect(analyser);   // analyser only — never to destination (feedback!)
+      micSource.connect(analyser);   // analyser only — never destination (feedback!)
       micBtn.setAttribute('aria-pressed', 'true');
-      setStatus('Listening to your microphone.');
+      liveEl.classList.add('shown');
+      idle.classList.add('hidden');
+      progressRow.classList.add('hidden');
+      titleEl.textContent = 'Microphone';
+      artistEl.textContent = 'Live input';
+      setStatus('Listening — make some noise.');
     }).catch(function () {
       setStatus('Could not open the microphone — check browser permissions.', true);
     });
   });
 
-  // --- Drawing ---------------------------------------------------------
+  volumeEl.addEventListener('input', function () {
+    if (audioCtx) player.volume = parseFloat(volumeEl.value);
+  });
 
-  function resize() {
+  function setMode(next) {
+    mode = next;
+    modeBars.setAttribute('aria-pressed', String(mode === 'bars'));
+    modeWave.setAttribute('aria-pressed', String(mode === 'wave'));
+  }
+  modeBars.addEventListener('click', function () { setMode('bars'); });
+  modeWave.addEventListener('click', function () { setMode('wave'); });
+
+  // --- Seeking ----------------------------------------------------------
+  var dragging = false;
+  function seekTo(e) {
+    if (!hasFile || !isFinite(player.duration)) return;
+    var rect = seekEl.getBoundingClientRect();
+    var pct = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    player.currentTime = pct * player.duration;
+    renderProgress(pct);
+  }
+  seekEl.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    seekEl.setPointerCapture(e.pointerId);
+    seekTo(e);
+  });
+  seekEl.addEventListener('pointermove', function (e) { if (dragging) seekTo(e); });
+  seekEl.addEventListener('pointerup', function () { dragging = false; });
+  seekEl.addEventListener('keydown', function (e) {
+    if (!hasFile) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); player.currentTime = Math.max(0, player.currentTime - 5); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); player.currentTime = Math.min(player.duration || 0, player.currentTime + 5); }
+  });
+
+  function fmt(s) {
+    if (!isFinite(s)) return '0:00';
+    var m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return m + ':' + (sec < 10 ? '0' : '') + sec;
+  }
+  function renderProgress(pct) {
+    fillEl.style.width = (pct * 100) + '%';
+    dotEl.style.left = (pct * 100) + '%';
+    seekEl.setAttribute('aria-valuenow', Math.round(pct * 100));
+    elapsedEl.textContent = fmt(player.currentTime);
+    remainingEl.textContent = '-' + fmt((player.duration || 0) - player.currentTime);
+  }
+
+  // --- Keyboard ---------------------------------------------------------
+  document.addEventListener('keydown', function (e) {
+    var tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+    if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'ArrowLeft' && hasFile) { e.preventDefault(); player.currentTime = Math.max(0, player.currentTime - 5); }
+    else if (e.key === 'ArrowRight' && hasFile) { e.preventDefault(); player.currentTime = Math.min(player.duration || 0, player.currentTime + 5); }
+  });
+
+  // --- Canvas -----------------------------------------------------------
+  function fitCanvas(cv, ctx, w, h) {
     var dpr = window.devicePixelRatio || 1;
-    var w = panel.clientWidth;
-    var h = Math.round(w * 0.41);   // ~920×380 aspect
-    canvas.width = Math.round(w * dpr);
-    canvas.height = Math.round(h * dpr);
-    canvas.style.height = h + 'px';
-    c2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  function resize() {
+    fitCanvas(canvas, c2d, panel.clientWidth, panel.clientHeight);
+    fitCanvas(thumbCanvas, t2d, 56, 56);
   }
   window.addEventListener('resize', resize);
   resize();
 
-  // Log-spaced grouping: the FFT spreads bins evenly, so give the low
-  // end more bars-per-hertz. Bass gets room, the squeals get less.
+  // Log-spaced grouping: give the low end more bars-per-hertz.
   function bandValue(i, binCount) {
-    var lo = Math.floor(Math.pow(binCount, i / BAR_COUNT));
+    var lo = i === 0 ? 0 : Math.floor(Math.pow(binCount, i / BAR_COUNT));
     var hi = Math.max(lo + 1, Math.floor(Math.pow(binCount, (i + 1) / BAR_COUNT)));
     var m = 0;
     for (var j = lo; j < hi && j < binCount; j++) if (bins[j] > m) m = bins[j];
@@ -324,24 +674,24 @@
     for (var i = 0; i < 12; i++) bass += bins[i];
     bass /= 12 * 255;
     beatHistory.push(bass);
-    if (beatHistory.length > 60) beatHistory.shift();   // ~1s rolling window
+    if (beatHistory.length > 60) beatHistory.shift();
     var avg = 0;
     for (var k = 0; k < beatHistory.length; k++) avg += beatHistory[k];
     avg /= beatHistory.length;
     if (bass > avg * 1.35 + 0.02 && bass > 0.25 && now - lastBeat > BEAT_COOLDOWN) {
       lastBeat = now;
-      ring.t = 0;
-      panel.style.borderColor = tokens.accent;          // 120ms CSS pulse…
+      ringT = 0;
+      panel.style.borderColor = tokens.accent;
       setTimeout(function () { panel.style.borderColor = ''; }, 140);
     }
   }
 
   function drawRing(w, h) {
-    if (ring.t === Infinity) return;
-    ring.t += 1 / 60;
+    if (ringT === Infinity) return;
+    ringT += 1 / 60;
     var life = 0.6;
-    if (ring.t > life) { ring.t = Infinity; return; }
-    var p = ring.t / life;
+    if (ringT > life) { ringT = Infinity; return; }
+    var p = ringT / life;
     c2d.save();
     c2d.globalAlpha = (1 - p) * 0.5;
     c2d.strokeStyle = tokens.accent;
@@ -355,46 +705,85 @@
   function drawBars(w, h) {
     var gap = 3;
     var barW = (w - gap * (BAR_COUNT - 1)) / BAR_COUNT;
+    var maxH = h - 24;
     for (var i = 0; i < BAR_COUNT; i++) {
       var target = Math.pow(bandValue(i, analyser.frequencyBinCount), 0.85);
       displayed[i] += (target - displayed[i]) * (target > displayed[i] ? SMOOTH_UP : SMOOTH_DOWN);
-      var bh = Math.max(2, displayed[i] * (h - 24));
+      var level = displayed[i];
+      // Peak caps fall slowly — classic equalizer feel.
+      if (level >= peaks[i]) peaks[i] = level;
+      else peaks[i] = Math.max(0, peaks[i] - 0.007);
+      var bh = Math.max(3, level * maxH);
       var x = i * (barW + gap);
-      c2d.fillStyle = tokens.accent;
+      c2d.fillStyle = alpha(0.55 + level * 0.45);
       c2d.beginPath();
-      // roundRect with 4px radius; fallback rect for older engines
       if (c2d.roundRect) {
-        c2d.roundRect(x, h - bh, barW, bh, 4);
+        c2d.roundRect(x, h - bh, barW, bh, [3, 3, 3, 3]);
         c2d.fill();
       } else {
         c2d.fillRect(x, h - bh, barW, bh);
       }
+      var py = h - Math.max(3, peaks[i] * maxH) - 4;
+      c2d.fillStyle = alpha(1);
+      c2d.fillRect(x, py, barW, 2);
     }
   }
 
   function drawWave(w, h) {
-    analyser.getByteTimeDomainData(wave);
+    analyser.getByteTimeDomainData(waveArr);
     var mid = h / 2;
     c2d.strokeStyle = tokens['border-subtle'];
     c2d.lineWidth = 1;
     c2d.beginPath();
     c2d.moveTo(0, mid); c2d.lineTo(w, mid); c2d.stroke();
+    var step = waveArr.length / w;
+    function path(offset, scale) {
+      c2d.beginPath();
+      for (var x = 0; x < w; x++) {
+        var v = (waveArr[Math.floor(x * step)] - 128) / 128;
+        var y = mid + v * (h * 0.42 * scale) + offset;
+        if (x === 0) c2d.moveTo(x, y); else c2d.lineTo(x, y);
+      }
+      c2d.stroke();
+    }
+    c2d.lineJoin = 'round';
+    c2d.strokeStyle = alpha(0.28);
+    c2d.lineWidth = 6;
+    path(0, 1.06);
     c2d.strokeStyle = tokens.accent;
     c2d.lineWidth = 2.5;
-    c2d.lineJoin = 'round';
-    c2d.beginPath();
-    var step = wave.length / w;
-    for (var x = 0; x < w; x++) {
-      var v = (wave[Math.floor(x * step)] - 128) / 128;
-      var y = mid + v * (h * 0.42);
-      if (x === 0) c2d.moveTo(x, y); else c2d.lineTo(x, y);
+    path(0, 1);
+  }
+
+  // The thumbnail is a mini equalizer — a live "album art" tile.
+  function drawThumb() {
+    t2d.clearRect(0, 0, 56, 56);
+    var n = 7, gap = 3;
+    var bw = (56 - 12 - gap * (n - 1)) / n;
+    for (var i = 0; i < n; i++) {
+      var level = displayed[Math.floor((i + 0.5) / n * BAR_COUNT)];
+      var bh = Math.max(3, level * 36 + 3);
+      var x = 6 + i * (bw + gap);
+      t2d.fillStyle = alpha(0.55 + level * 0.45);
+      t2d.beginPath();
+      if (t2d.roundRect) {
+        t2d.roundRect(x, 56 - 6 - bh, bw, bh, [2, 2, 2, 2]);
+        t2d.fill();
+      } else {
+        t2d.fillRect(x, 56 - 6 - bh, bw, bh);
+      }
     }
-    c2d.stroke();
   }
 
   function frame(now) {
-    var w = canvas.width / (window.devicePixelRatio || 1);
-    var h = canvas.height / (window.devicePixelRatio || 1);
+    var w = panel.clientWidth, h = panel.clientHeight;
+
+    // Drench: beat energy tints the tile and, faintly, the page.
+    var pulse = 0;
+    if (ringT !== Infinity) pulse = (1 - ringT / 0.6);
+    tilePulse.style.opacity = (pulse * 0.07).toFixed(3);
+    pagePulse.style.opacity = (pulse * 0.045).toFixed(3);
+
     c2d.fillStyle = tokens['surface-sunken'];
     c2d.fillRect(0, 0, w, h);
 
@@ -402,7 +791,12 @@
       analyser.getByteFrequencyData(bins);
       detectBeat(now);
       drawRing(w, h);
-      if (modeEl.value === 'wave') drawWave(w, h); else drawBars(w, h);
+      if (mode === 'wave') drawWave(w, h); else drawBars(w, h);
+    }
+    drawThumb();
+
+    if (hasFile && !dragging && isFinite(player.duration) && player.duration > 0) {
+      renderProgress(player.currentTime / player.duration);
     }
     requestAnimationFrame(frame);
   }
