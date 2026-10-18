@@ -5,6 +5,11 @@ machine is outputting, reads the track from MPRIS, and draws it: large cover
 art on the left (sleeve or spinning vinyl), a full-width analyser on the right,
 the track name underneath, and real transport controls. Nothing to import.
 
+**Live demo:** <https://liqwidcell-dot.github.io/visualise/> — the interface on
+its own. GitHub Pages can't spawn `parec` or reach MPRIS, so the hosted copy
+reports "helper offline"; drop an audio file on it to see the analyser run
+there, or run it locally for the real thing.
+
 ## Run it
 
 ```sh
