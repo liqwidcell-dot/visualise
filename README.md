@@ -1,82 +1,107 @@
 # visualise
 
-A now-playing dashboard for your whole computer. It listens to whatever the
-machine is outputting, reads the track from MPRIS, and draws it: large cover
-art on the left (sleeve or spinning vinyl), a full-width analyser on the right,
-the track name underneath, and real transport controls. Nothing to import.
+A now-playing dashboard for whatever your machine is playing: large cover art on
+one side (sleeve or spinning vinyl), a full-width analyser filling the rest, the
+track name underneath, and the cover's dominant colour drenching the background
+and pulsing on beats.
 
-**Live demo:** <https://liqwidcell-dot.github.io/visualise/> — the interface on
-its own. GitHub Pages can't spawn `parec` or reach MPRIS, so the hosted copy
-reports "helper offline"; drop an audio file on it to see the analyser run
-there, or run it locally for the real thing.
+**No install, no build, no helper.** One HTML file, standard browser APIs only.
 
-## Run it
+**Live demo:** <https://liqwidcell-dot.github.io/visualise/>
 
-```sh
-python3 serve.py
-```
+## Using it
 
-It starts `http://127.0.0.1:8765/` and opens your browser (`--no-open` to
-skip, `--port N` to move it). The page cannot capture system audio on its own,
-so a small standard-library helper does the work — no dependencies, no build
-step, and it binds to loopback only.
+1. Play something in a browser tab.
+2. Click **Capture what's playing** and pick that tab, with *Also share tab
+   audio* ticked.
+3. Type the artist and title into the field that appears. Cover art, its colour
+   and the service links follow from that name — a web page cannot read another
+   app's metadata, so the page asks rather than guesses.
 
-Requirements: Python 3.8+, PipeWire or PulseAudio (`parec`, `pactl`), and
-`playerctl` for metadata and transport. Missing pieces degrade quietly: no
-capture still shows the track and art; no playerctl still visualises the audio.
+Nothing to play? Drop an audio file anywhere on the page: it plays locally and
+the analyser runs on it, and any embedded cover art is read straight from the
+file. Or add `?selftest=1` for a silent synthetic tone that proves the meters
+move, with no permission needed.
 
-## How it works
+## What it can capture
 
-- **Capture** — `parec` records the default sink's monitor source as raw
-  stereo `s16le`; the helper streams it over chunked HTTP. The page feeds it
-  through an `AudioWorklet` ring buffer into an `AnalyserNode`. Your audio is
-  already audible, so the page only listens *visually*: the graph ends in a
-  gain of zero.
-- **Now playing** — `/api/state` reads MPRIS through `playerctl`. A playing
-  player always wins; when everything is paused the last-active player stays
-  selected, so two paused players don't fight over the page.
-- **Transport** — `/api/control` does play/pause, next, previous and seek
-  against the selected player.
-- **Cover art** — proxied through `/api/art?url=…`. Serving it same-origin is
-  what makes the pixels readable for colour extraction; it handles `http(s)`
-  art and the `file://` art that browsers (Firefox) publish.
-- **Colour** — the dominant colour of the cover drenches the background and
-  pulses on beats. Text ink is picked for that colour and the mix is backed off
-  until *every* text token clears WCAG AA (4.5:1) — no cover can make the text
-  unreadable. Measured worst case over 28 cover/base pairs: 4.58:1.
-- **Art** — Sleeve or Vinyl, remembered in `localStorage`. The vinyl spins at
-  1.8s/rev (33⅓ rpm) while playing, with grooves, a sheen and a spindle hole.
-- **Beat** — bass-onset detection drives the background pulse, a ring, and a
-  small scale on the art. Honours `prefers-reduced-motion`.
-- **Fallbacks** — drop an audio file anywhere on the page to play it locally
-  (it becomes audible and is analysed in place). MusicBrainz is queried only
-  when the player supplies no art at all.
+Capture is capability-driven, not user-agent sniffed — it tries the best route it
+can actually get:
+
+1. **Share a tab.** `getDisplayMedia` first: pick the tab that is playing. On
+   Linux this is the only zero-install route to audio — Chromium can share *tab*
+   audio, Firefox cannot share audio at all. The share's video track is kept
+   alive but never drawn, which is what keeps the browser's own "Stop sharing"
+   bar working, and its `ended` event is how the page notices sharing stopped.
+   Echo cancellation, noise suppression and auto gain are switched off: they are
+   tuned for speech and mangle music.
+2. **A loopback input.** If the share carries no audio track, the page looks for
+   an input device whose name suggests a monitor or loopback (PipeWire,
+   BlackHole, Stereo Mix, …). Stock Chromium filters monitor devices out of its
+   picker, so this mainly helps Firefox or a virtual sink. Device labels only
+   appear once microphone permission is granted, so the page asks once.
+3. **An honest status message** when neither is available.
+
+There is no microphone path: this is for visualising what is already playing, not
+for listening to the room.
+
+## Cover art
+
+- **Typed names** are looked up on the [iTunes Search
+  API](https://performance-partners.apple.com/search-api) — keyless, CORS-open,
+  artwork included. MusicBrainz/Cover Art Archive was dropped: archive.org sends
+  no `Access-Control-Allow-Origin`, so the canvas would be tainted and the colour
+  engine could never read the pixels.
+- **Dropped files** carry their own art: ID3v2 (`APIC`/`PIC`), MP4 `covr` and
+  FLAC `PICTURE` are read directly from the bytes. Front cover wins, else the
+  largest. Ogg is deliberately unsupported. This path is offline — no lookup.
+- A typed artist is never overwritten by a match; a bare title gets the matched
+  artist filled in.
+- Opened straight from disk (`file://`) browsers block the cross-origin lookup,
+  so the page says so. Use the hosted copy, or any local web server, for art.
+
+## Colour
+
+The cover's dominant colour drenches the page and pulses on bass onsets. Ink is
+chosen for each cover and the mix is backed off in steps until *every* text token
+clears WCAG AA (4.5:1), so no cover can make the text unreadable — measured worst
+case over 14 covers × 2 themes is 4.58:1. Honours `prefers-reduced-motion`.
 
 ## Controls
 
 | | |
 |---|---|
-| <kbd>Space</kbd> | play / pause |
-| <kbd>←</kbd> <kbd>→</kbd> | seek 5s |
+| **Capture what's playing** | pick a tab to listen to |
+| **Stop capturing** | stop (the browser's own *Stop sharing* does too) |
+| <kbd>Space</kbd> | play / pause a dropped file |
+| <kbd>←</kbd> <kbd>→</kbd> | seek 5s in a file |
 | click the bar | scrub |
+| <kbd>Enter</kbd> in the name field | look up cover art |
+| drop a file anywhere | play it locally |
 
-Status line tells you what's happening: `spotify · Playing`, or
-`click anywhere to start listening` (browsers hold a fresh `AudioContext`
-suspended until the page sees a gesture), or
-`helper offline — run: python3 serve.py` if you opened the file directly.
+## Debug flags
 
-## Test flags
-
-`?debug=1` mirrors live state into `<html data-viz>` — frames, audio level,
-peak, PCM chunks received, source, art mode, and the computed background/ink.
-Useful in DevTools; used by the tests. `?capture=0` skips the audio stream and
-`?art=vinyl` preselects the art mode, both for deterministic screenshots.
+`?debug=1` mirrors live state into `<html data-viz>` — frames, level, peak,
+source, art, art mode, background/ink, the last lookup and the status line. It is
+how the tests read the page and it is handy in DevTools. `?q=Artist+-+Title`
+pre-fills and resolves the identity field, and `?selftest=1` pushes a silent
+synthetic tone through the real capture path. All three are for deterministic
+screenshots and checks.
 
 ## Tests
 
 ```sh
-node tests/pure.test.js      # colour/contrast engine, matching, parsing (33)
-node tests/worklet.test.js   # PCM ring-buffer processor (16)
+node tests/pure.test.js          # colour/contrast engine, name matching, parsing
+node tests/embedded-art.test.js  # embedded cover art, every supported format
 ```
 
-Both extract the real functions out of `index.html`, so they test what ships.
+Plain `node`, no dependencies and no `package.json`. Both suites pull the real
+functions out of `index.html` by brace matching (`tests/extract.js`) instead of
+keeping copies, so they test exactly what ships. `pure.test.js` ends with one
+live iTunes call and skips it when offline.
+
+## Files
+
+`index.html` is the whole product: markup, design tokens, styling and script.
+`tests/` holds the two suites and the shared extractor. The working journal is
+deliberately not in this repo.

@@ -279,6 +279,28 @@
   .track:hover #dot, .track:focus-visible #dot { opacity: 1; }
 
   .controls { display: flex; align-items: center; gap: 0.75rem; }
+  .ctl-label {
+    font-size: 0.8125rem;
+    color: var(--page-ink-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #id-row { gap: 0.5rem; }
+  #id-input {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    color: var(--page-ink);
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 0.45rem 0.65rem;
+  }
+  #id-input::placeholder { color: var(--page-ink-2); }
+  #id-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #id-go { width: 34px; height: 34px; flex: none; }
   button {
     font-family: var(--font-sans);
     font-size: 15px;
@@ -389,10 +411,10 @@
     </span>
     <div>
       <h2>visualise</h2>
-      <div class="sub">your system audio, seen</div>
+      <div class="sub">whatever's playing, seen</div>
     </div>
   </div>
-  <div id="status" role="status">connecting…</div>
+  <div id="status" role="status">ready</div>
 </header>
 
 <main class="app">
@@ -419,11 +441,11 @@
   </section>
 
   <section class="stage">
-    <div id="panel"><canvas id="viz" aria-label="System audio visualisation"></canvas></div>
+    <div id="panel"><canvas id="viz" aria-label="Audio visualisation"></canvas></div>
 
     <div class="nowplaying">
       <h1 id="title-wrap"><span id="title">Nothing playing</span></h1>
-      <div id="artist">Play anything on your system — visualise listens to it</div>
+      <div id="artist">Click play to capture what's playing, or drop a file</div>
     </div>
 
     <div id="seek-row" class="seek-row off">
@@ -436,22 +458,27 @@
       <span id="remaining" class="time right">0:00</span>
     </div>
 
-    <div class="controls">
-      <button id="prev" class="icon-btn" aria-label="Previous track" title="Previous">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M6 5h2v14H6zM20 5v14L9 12z"/>
+    <!-- Capture mode has no duration and no transport, so this slot carries
+         the identity field instead: type what is playing to get cover art. -->
+    <div id="id-row" class="seek-row off">
+      <input id="id-input" type="text" autocomplete="off" spellcheck="false"
+             placeholder="What's playing? Artist - Title, then Enter"
+             aria-label="What's playing">
+      <button id="id-go" class="icon-btn" aria-label="Find cover art" title="Find cover art">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="7"/><path d="M20 20l-4.2-4.2"/>
         </svg>
       </button>
-      <button id="play" aria-label="Play">
+    </div>
+
+    <div class="controls">
+      <button id="play" aria-label="Capture what's playing" title="Capture what's playing">
         <svg id="play-icon" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M7 4.5v15l13-7.5z"/>
         </svg>
       </button>
-      <button id="next" class="icon-btn" aria-label="Next track" title="Next">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <path d="M16 5h2v14h-2zM4 5v14l11-7z"/>
-        </svg>
-      </button>
+      <span id="play-label" class="ctl-label">Capture what's playing</span>
       <div class="spacer"></div>
       <div id="services" class="services">
         <a id="svc-spotify" class="icon-btn" target="_blank" rel="noopener"
@@ -471,41 +498,10 @@
   </section>
 </main>
 
-<p class="hint"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> seek · drop a file
-anywhere to play it locally · helper: <kbd>python3 serve.py</kbd></p>
+<p class="hint"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> seek · drop an audio file
+anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chromium, share the tab that's playing</p>
 
 <audio id="player"></audio>
-
-<!-- PCM ring-buffer worklet: fed Int16→Float32 chunks from /stream, output
-     goes to the analyser through a muted gain (system audio is already
-     audible — we only listen to it visually). -->
-<script id="worklet-src" type="text/plain">
-class PCMFeed extends AudioWorkletProcessor {
-  constructor() {
-    super();
-    this.q = [];
-    this.port.onmessage = (e) => this.q.push(e.data);
-  }
-  process(inputs, outputs) {
-    const out = outputs[0];
-    const L = out[0], R = out.length > 1 ? out[1] : out[0];
-    const n = L.length;
-    let filled = 0;
-    while (filled < n && this.q.length) {
-      const head = this.q[0];
-      const take = Math.min(n - filled, head.l.length - head.i);
-      L.set(head.l.subarray(head.i, head.i + take), filled);
-      if (R !== L) R.set(head.r.subarray(head.i, head.i + take), filled);
-      head.i += take;
-      filled += take;
-      if (head.i >= head.l.length) this.q.shift();
-    }
-    if (this.q.length > 8) this.q.splice(0, this.q.length - 8);  // cap backlog
-    return true;
-  }
-}
-registerProcessor('pcm-feed', PCMFeed);
-</script>
 
 <script>
 (function () {
@@ -523,33 +519,40 @@ registerProcessor('pcm-feed', PCMFeed);
   var statusEl = $('status'), bgPulse = $('bg-pulse');
   var seekRow = $('seek-row'), seekEl = $('seek'), fillEl = $('fill'), dotEl = $('dot');
   var elapsedEl = $('elapsed'), remainingEl = $('remaining');
-  var playBtn = $('play'), playIcon = $('play-icon'), prevBtn = $('prev'), nextBtn = $('next');
+  var playBtn = $('play'), playIcon = $('play-icon'), playLabel = $('play-label');
+  var idRow = $('id-row'), idInput = $('id-input'), idGo = $('id-go');
   var modeBars = $('mode-bars'), modeWave = $('mode-wave');
   var sleeveBtn = $('art-sleeve'), vinylBtn = $('art-vinyl');
   var servicesEl = $('services'), svcSpotify = $('svc-spotify'), svcYtm = $('svc-ytm');
   var player = $('player');
 
   var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  // Test/debug flags: ?capture=0 skips the audio stream (deterministic
-  // screenshots), ?debug=1 mirrors live state into <html data-viz>.
-  var CAPTURE = !/[?&]capture=0/.test(location.search);
+  // Debug flags: ?debug=1 mirrors live state into <html data-viz>; ?q=<text>
+  // pre-fills the identity field and runs the lookup (deterministic
+  // screenshots of the art + colour path without capturing anything).
   var DEBUG = /[?&]debug=1/.test(location.search);
+  var QUERY = (/[?&]q=([^&]*)/.exec(location.search) || [])[1];
+  if (QUERY) QUERY = decodeURIComponent(QUERY.replace(/\+/g, ' '));
+  var SELFTEST = /[?&]selftest=1/.test(location.search);
 
-  var PLAY_PATH = 'M7 4.5v15l13-7.5z';
-  var PAUSE_PATH = 'M6 4h4v16H6zM14 4h4v16h-4z';
+  var ICON = {
+    play: 'M7 4.5v15l13-7.5z',
+    pause: 'M6 4h4v16H6zM14 4h4v16h-4z',
+    stop: 'M6 6h12v12H6z'
+  };
+  var IDLE_HINT = "Click play to capture what's playing, or drop a file";
 
-  var audioCtx = null, analyser = null, workletNode = null, muteGain = null;
-  var fileSource = null, streamReader = null;
-  var bins = null, waveArr = null, pcmRate = 48000;
+  var audioCtx = null, analyser = null, muteGain = null, fileSource = null;
+  var streamSource = null, captureStream = null, captureKind = null;
+  var bins = null, waveArr = null;
   var displayed = new Float32Array(BAR_COUNT);
   var peaks = new Float32Array(BAR_COUNT);
   var beatHistory = [], lastBeat = 0, ringT = Infinity;
   var mode = 'bars';
-  var state = null, stateAt = 0, lastKey = null;
-  var serverOk = true, fileMode = false, dragging = false;
-  var objectUrl = null, artSeq = 0, idSeq = 0;
-  var lastCover = null;
-  var pcmChunks = 0, pcmBytes = 0, levelPeak = 0;
+  var fileMode = false, dragging = false;
+  var objectUrl = null, artObjectUrl = null, artSeq = 0, idSeq = 0;
+  var lastCover = null, levelPeak = 0;
+  var identity = { artist: '', title: '', bare: true };
 
   // --- Tokens / theme ---------------------------------------------------
   function refreshTokens() {
@@ -682,11 +685,8 @@ registerProcessor('pcm-feed', PCMFeed);
       return Promise.resolve(true);
     }
     try {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
-    } catch (e) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    pcmRate = audioCtx.sampleRate;
+    } catch (e) { return Promise.resolve(false); }
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 2048;
     analyser.smoothingTimeConstant = 0.82;
@@ -698,83 +698,196 @@ registerProcessor('pcm-feed', PCMFeed);
     muteGain.gain.value = 0;
     analyser.connect(muteGain);
     muteGain.connect(audioCtx.destination);
-    var ready = Promise.resolve();
-    try {
-      var src = $('worklet-src').textContent;
-      var url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
-      ready = audioCtx.audioWorklet.addModule(url).then(function () {
-        workletNode = new AudioWorkletNode(audioCtx, 'pcm-feed', {
-          numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2]
-        });
-        workletNode.connect(analyser);
-      });
-    } catch (e) { workletNode = null; }
     if (audioCtx.state === 'suspended') audioCtx.resume();
-    return ready.then(function () { return true; });
+    return Promise.resolve(true);
   }
 
-  function pushPCM(u8) {
-    if (!workletNode) return;
-    var frames = Math.floor(u8.byteLength / 4);
-    var l = new Float32Array(frames), r = new Float32Array(frames);
-    var dv = new DataView(u8.buffer, u8.byteOffset, frames * 4);
-    for (var i = 0; i < frames; i++) {
-      l[i] = dv.getInt16(i * 4, true) / 32768;
-      r[i] = dv.getInt16(i * 4 + 2, true) / 32768;
+  // --- Capture: two in-browser routes, nothing to install ---------------
+  //   tab      — getDisplayMedia on the tab that is playing. On Linux this is
+  //              the only route that carries audio, and it is Chromium-only
+  //              (Firefox cannot share audio at all).
+  //   loopback — an input device that mirrors the output, when the browser
+  //              exposes one. Chrome hides monitor sources; Firefox and
+  //              PulseAudio setups with a virtual sink do not.
+  // Whatever arrives goes into the analyser and nowhere else: nothing is
+  // uploaded, and the tab keeps playing through its own output.
+  var LOOPBACK_RE = /(monitor|loopback|stereo mix|what u hear|blackhole|virtual.*(sink|output)|output.*capture)/i;
+  var ID_PLACEHOLDER = "What's playing? Artist - Title, then Enter";
+
+  function listInputs() {
+    var md = navigator.mediaDevices;
+    if (!md || !md.enumerateDevices) return Promise.resolve([]);
+    return md.enumerateDevices().then(function (all) {
+      return all.filter(function (d) { return d.kind === 'audioinput'; });
+    }).catch(function () { return []; });
+  }
+
+  function findLoopback(inputs) {
+    for (var i = 0; i < inputs.length; i++) {
+      if (inputs[i].label && LOOPBACK_RE.test(inputs[i].label)) return inputs[i];
     }
-    workletNode.port.postMessage({ l: l, r: r, i: 0 }, [l.buffer, r.buffer]);
-    pcmChunks++;
-    pcmBytes += u8.byteLength;
-    // Headless testing hook: rAF is throttled without a compositor, so also
-    // sample the analyser as chunks arrive (?debug=1 only).
-    if (DEBUG && pcmChunks % 20 === 0 && analyser) {
-      analyser.getByteFrequencyData(bins);
-      var sum = 0;
-      for (var k = 0; k < 24; k++) sum += bins[k];
-      var lvl = sum / (24 * 255);
-      window.__viz.level = lvl;
-      if (lvl > levelPeak) levelPeak = lvl;
-      debugReport();
+    return null;
+  }
+
+  // Raw capture: the browser defaults (echo cancellation, noise suppression,
+  // auto gain) are tuned for speech and would chew up music.
+  function micConstraints(deviceId) {
+    var c = { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+    if (deviceId) c.deviceId = { exact: deviceId };
+    return c;
+  }
+
+  function stopTracks(stream) {
+    if (!stream) return;
+    var t = stream.getTracks();
+    for (var i = 0; i < t.length; i++) { try { t[i].stop(); } catch (e) {} }
+  }
+
+  function attachStream(stream, kind, label) {
+    captureStream = stream;
+    captureKind = kind;
+    streamSource = audioCtx.createMediaStreamSource(stream);
+    streamSource.connect(analyser);
+    var audio = stream.getAudioTracks();
+    for (var i = 0; i < audio.length; i++) {
+      audio[i].addEventListener('ended', function () { stopCapture(true); });
     }
+    // The video track is kept (and never drawn) on purpose: it is what makes
+    // the browser's own "Stop sharing" bar work, and its 'ended' event is how
+    // we learn that the user stopped sharing.
+    beginCapture(kind, label);
+    setStatus(kind === 'tab' ? 'capturing shared audio' : 'capturing system audio (loopback)');
   }
 
-  var streamTries = 0;
-
-  function pumpStream() {
-    streamReader.read().then(function (res) {
-      if (res.done) { streamReader = null; retryStream(); return; }
-      streamTries = 0;
-      pushPCM(res.value);
-      pumpStream();
-    }).catch(function () { streamReader = null; retryStream(); });
-  }
-
-  // A dropped stream (helper restarted, PipeWire hiccup) shouldn't leave the
-  // visualiser dead until a reload; retry a few times, then give up quietly.
-  function retryStream() {
-    if (fileMode || !CAPTURE || streamTries >= 5) return;
-    streamTries++;
-    setTimeout(function () { if (!fileMode) startSystemAudio(); }, 2000);
-  }
-
-  function startSystemAudio() {
-    if (fileMode || streamReader || !CAPTURE) return Promise.resolve();
+  function startCapture() {
+    if (captureStream || fileMode) return Promise.resolve();
     return ensureRunning().then(function (ok) {
-      if (!ok) { applyStatus(); return; }
-      if (fileMode || streamReader) return;
-      return fetch('/stream?rate=' + pcmRate + '&channels=2').then(function (res) {
-        if (!res.ok || !res.body) {
-          setStatus('no audio capture — is PipeWire running?', true);
+      if (!ok) { setStatus('audio is not available in this browser', true); return; }
+      if (captureStream || fileMode) return;
+      var md = navigator.mediaDevices;
+      if (!md || !md.getDisplayMedia) return tryLoopback('this browser cannot share tab audio');
+      setStatus('choose the tab that is playing…');
+      return md.getDisplayMedia({
+        video: { displaySurface: 'browser' },   // hint: the tab picker
+        audio: {
+          suppressLocalAudioPlayback: false,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          systemAudio: 'include'
+        },
+        preferCurrentTab: false,
+        selfBrowserSurface: 'exclude'
+      }).then(function (stream) {
+        if (stream.getAudioTracks().length) { attachStream(stream, 'tab', videoLabel(stream)); return; }
+        stopTracks(stream);
+        return tryLoopback('that share carried no audio');
+      }).catch(function (err) {
+        if (err && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+          setStatus('share cancelled — nothing captured');
           return;
         }
-        streamReader = res.body.getReader();
-        pumpStream();
+        return tryLoopback('screen sharing failed here');
       });
-    }).catch(function () { setStatus('helper offline — run: python3 serve.py', true); });
+    }).catch(function () { setStatus('capture failed', true); });
   }
 
-  function stopSystemAudio() {
-    if (streamReader) { try { streamReader.cancel(); } catch (e) {} streamReader = null; }
+  function videoLabel(stream) {
+    var v = stream.getVideoTracks()[0];
+    return (v && v.label) || '';
+  }
+
+  // Second chance: some setups expose an input that mirrors the output. Input
+  // labels stay hidden until the page has microphone permission, so when we
+  // find nothing and permission has not been granted, ask once and look again
+  // (that is the only way to reveal the labels).
+  function tryLoopback(reason) {
+    var md = navigator.mediaDevices;
+    if (!md || !md.getUserMedia) { setStatus(loopbackHelp(reason), true); return Promise.resolve(); }
+    return listInputs().then(function (inputs) {
+      var found = findLoopback(inputs);
+      if (found) return openLoopback(found, reason);
+      return micPermission().then(function (perm) {
+        if (perm === 'granted') { setStatus(loopbackHelp(reason), true); return; }
+        return md.getUserMedia({ audio: micConstraints(null) }).then(function (probe) {
+          return listInputs().then(function (again) {
+            var second = findLoopback(again);
+            stopTracks(probe);
+            if (!second) { setStatus(loopbackHelp(reason), true); return; }
+            return openLoopback(second, reason);
+          });
+        });
+      });
+    }).catch(function () { setStatus(loopbackHelp(reason), true); });
+  }
+
+  function micPermission() {
+    if (!navigator.permissions || !navigator.permissions.query) return Promise.resolve('prompt');
+    return navigator.permissions.query({ name: 'microphone' })
+      .then(function (p) { return p.state; })
+      .catch(function () { return 'prompt'; });
+  }
+
+  function openLoopback(device, reason) {
+    return navigator.mediaDevices.getUserMedia({ audio: micConstraints(device.deviceId) })
+      .then(function (stream) { attachStream(stream, 'loopback', ''); })
+      .catch(function () { setStatus(loopbackHelp(reason), true); });
+  }
+
+  function loopbackHelp(reason) {
+    return reason + ' — click play again and share the tab that is playing (Firefox cannot share audio)';
+  }
+
+  function stopCapture(byBrowser) {
+    if (streamSource) { try { streamSource.disconnect(); } catch (e) {} streamSource = null; }
+    stopTracks(captureStream);
+    captureStream = null;
+    captureKind = null;
+    if (fileMode) return;
+    idRow.classList.add('off');
+    clearCoverColour();
+    artFrame.dataset.hasArt = 'false';
+    artFrame.dataset.playing = 'false';
+    titleEl.textContent = 'Nothing playing';
+    artistEl.textContent = IDLE_HINT;
+    titleWrap.classList.remove('marquee');
+    servicesEl.classList.remove('shown');
+    setStatus(byBrowser ? 'sharing stopped' : 'stopped');
+    updatePrimary();
+  }
+
+  // --- What is playing? -------------------------------------------------
+  // No browser can read another app's metadata, so a capture starts anonymous
+  // ("Shared tab audio") and you name it. The name is only used to look up
+  // cover art and to build the service links.
+  function labelLooksLikeTrack(label) {
+    if (!label) return false;
+    if (/^(screen|entire screen|window|tab|browser tab|chrome tab|share|display)\b/i.test(label)) return false;
+    if (/^\d+$/.test(label)) return false;
+    if (label.length < 6 || label.length > 120) return false;
+    return /[a-z]/i.test(label) && /\s/.test(label.trim());
+  }
+
+  function beginCapture(kind, label) {
+    fileMode = false;
+    identity = { artist: '', title: '', bare: true };
+    titleEl.textContent = kind === 'tab' ? 'Shared tab audio' : 'System audio';
+    artistEl.textContent = kind === 'tab'
+      ? 'type what is playing below to get cover art'
+      : 'loopback capture · type a track for cover art';
+    marquee();
+    artFrame.dataset.hasArt = 'false';
+    artFrame.dataset.playing = 'true';
+    servicesEl.classList.remove('shown');
+    seekRow.classList.add('off');
+    idRow.classList.remove('off');
+    enterArt();
+    clearCoverColour();
+    var guess = labelLooksLikeTrack(label) ? label.trim() : '';
+    idInput.placeholder = ID_PLACEHOLDER;
+    idInput.value = guess;
+    if (guess) setIdentity(guess);
+    updatePrimary();
   }
 
   // --- Track identity ---------------------------------------------------
@@ -826,37 +939,53 @@ registerProcessor('pcm-feed', PCMFeed);
   }
 
   function loadArt(src, seq) {
+    // crossOrigin keeps the pixels readable: the dominant colour comes from
+    // getImageData, which a tainted canvas refuses. Both art sources in use
+    // (iTunes artwork, blob URLs from a dropped file) allow it.
     var probe = new Image();
+    probe.crossOrigin = 'anonymous';
     probe.onload = function () {
       if (seq !== artSeq) return;
       artImg.src = src;
       artFrame.dataset.hasArt = 'true';
       var cov = dominantColour(probe);
       if (cov) applyCoverColour(cov); else clearCoverColour();
+      if (DEBUG) {
+        window.__viz.lookup += ';img=ok;cover=' + (cov
+          ? Math.round(cov.r) + ',' + Math.round(cov.g) + ',' + Math.round(cov.b) : 'none');
+      }
     };
     probe.onerror = function () {
       if (seq !== artSeq) return;
       artFrame.dataset.hasArt = 'false';
       clearCoverColour();
-      if (state && state.ok && state.title) identify(state.artist, state.title, seq);
+      if (DEBUG) window.__viz.lookup += ';img=fail';
     };
     probe.src = src;
   }
 
-  function setTrack(title, artist, artUrl) {
-    titleEl.textContent = title || 'Unknown track';
-    artistEl.textContent = artist || '';
+  function splitIdentity(text) {
+    var dash = /^(.+?)\s+[-\u2013\u2014]\s+(.+)$/.exec(text);
+    if (dash) return { artist: dash[1].trim(), title: dash[2].trim(), bare: false };
+    return { artist: '', title: text.trim(), bare: true };
+  }
+
+  // Name a capture by hand. The name is used for exactly two things: cover art
+  // and the service links. Nothing else can know what is playing.
+  function setIdentity(text) {
+    text = String(text || '').trim();
+    if (!text) { identity = { artist: '', title: '', bare: true }; clearCoverColour(); return; }
+    var parsed = splitIdentity(text);
+    identity = parsed;
+    titleEl.textContent = parsed.title;
+    artistEl.textContent = parsed.artist || '';
     marquee();
-    var seq = ++artSeq;
+    updateLinks(parsed.artist, parsed.title);
     artFrame.dataset.hasArt = 'false';
     enterArt();
-    if (artUrl) {
-      loadArt('/api/art?url=' + encodeURIComponent(artUrl), seq);
-    } else if (title) {
-      identify(artist, title, seq);
-    } else {
-      clearCoverColour();
-    }
+    clearCoverColour();
+    if (idInput.value !== text) idInput.value = text;
+    identify(parsed.artist, parsed.title, ++artSeq);
   }
 
   function updateLinks(artist, title) {
@@ -867,175 +996,654 @@ registerProcessor('pcm-feed', PCMFeed);
     servicesEl.classList.add('shown');
   }
 
-  function updatePlayIcon() {
-    var playing = fileMode ? !player.paused : !!(state && state.ok && state.status === 'Playing');
-    playIcon.innerHTML = '<path d="' + (playing ? PAUSE_PATH : PLAY_PATH) + '"/>';
-    playBtn.setAttribute('aria-label', playing ? 'Pause' : 'Play');
+  // One contextual primary button: idle → start capturing, capturing → stop,
+  // file → play/pause.
+  function updatePrimary() {
+    var icon, label;
+    if (fileMode) {
+      var playing = !player.paused;
+      icon = playing ? ICON.pause : ICON.play;
+      label = playing ? 'Pause' : 'Play';
+    } else if (captureStream) {
+      icon = ICON.stop;
+      label = 'Stop capturing';
+    } else {
+      icon = ICON.play;
+      label = "Capture what's playing";
+    }
+    playIcon.innerHTML = '<path d="' + icon + '"/>';
+    playBtn.setAttribute('aria-label', label);
+    playBtn.setAttribute('title', label);
+    playLabel.textContent = label;
   }
 
-  // --- MusicBrainz fallback (only when the player has no art) -----------
-  var idCache = Object.create(null);
+  // --- Cover art from iTunes --------------------------------------------
+  // MusicBrainz was the old source, but its images live on archive.org and
+  // send no Access-Control-Allow-Origin, so the canvas could never read them
+  // and the background could never take the cover's colour. iTunes' artwork
+  // host does allow it, needs no key, and its search API is CORS-open too.
+  var artCache = Object.create(null);
   var lastLookup = 0;
 
-  function haveArtistQuery(artist, title) {
-    return artist === 'Local file' || !artist
-      ? 'recording:"' + title + '"'
-      : 'recording:"' + title + '" AND artist:"' + artist + '"';
+  function normName(s) {
+    return String(s || '').toLowerCase()
+      .replace(/\s*[\(\[]([^\)\]]*)[\)\]]/g, ' ')          // (Remastered 2011), [Live]
+      .replace(/\s*[-\u2013\u2014]\s*(remaster(ed)?|feat\.?|ft\.?|with)\b.*$/i, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
   }
-  function pickRelease(releases) {
-    if (!releases || !releases.length) return null;
-    var candidates = releases.filter(function (r) {
-      if (r.status && r.status !== 'Official') return false;
-      return !/live|remix|bootleg|karaoke|tribute/i.test(r.title || '');
-    });
-    if (!candidates.length) candidates = releases.slice();
-    candidates.sort(function (a, b) { return (a.date || '9999') < (b.date || '9999') ? -1 : 1; });
-    return candidates[0];
+
+  function bigArtwork(url) {
+    return url ? url.replace(/\/\d+x\d+([a-z]*)\./, '/600x600$1.') : null;   // 100x100bb → 600x600bb
   }
-  function pickMatch(recordings, artist, title) {
-    var haveArtist = artist !== 'Local file';
-    var fallback = null;
-    for (var i = 0; i < recordings.length; i++) {
-      var rec = recordings[i];
-      if ((rec.score || 0) < (haveArtist ? 90 : 95)) continue;
-      var credited = (rec['artist-credit'] || []).map(function (a) { return a.name; }).join(', ');
-      if (haveArtist && credited.toLowerCase().indexOf(artist.toLowerCase()) === -1) continue;
-      var rel = pickRelease(rec.releases);
-      var match = {
-        title: rec.title,
-        artist: credited,
-        cover: rel ? 'https://coverartarchive.org/release/' + rel.id + '/front-250' : null
-      };
-      if (match.cover) return match;
-      if (!fallback) fallback = match;
+
+  function itunesQuery(artist, title) {
+    var term = (artist && artist !== 'Local file') ? artist + ' ' + title : title;
+    return 'https://itunes.apple.com/search?media=music&entity=song&limit=8&term=' + encodeURIComponent(term);
+  }
+
+  function pickTrack(results, artist, title) {
+    var wantT = normName(title);
+    var wantA = normName(artist === 'Local file' ? '' : artist);
+    var best = null, bestScore = -1;
+    for (var i = 0; i < (results || []).length; i++) {
+      var r = results[i];
+      if (!r || !r.artworkUrl100) continue;               // art is the point
+      var t = normName(r.trackName), a = normName(r.artistName);
+      var s = 0;
+      if (t === wantT) s += 3;
+      else if (t && wantT && (t.indexOf(wantT) === 0 || wantT.indexOf(t) === 0)) s += 1.5;
+      if (wantA) {
+        if (a === wantA) s += 2.5;
+        else if (a.indexOf(wantA) !== -1 || wantA.indexOf(a) !== -1) s += 1.5;
+        else s -= 2;                                     // an artist mismatch must not win
+      }
+      s += 0.5;                                          // has art
+      if (s > bestScore) { bestScore = s; best = r; }
     }
-    return fallback;
+    if (!best || bestScore < 2) return null;
+    return {
+      title: best.trackName,
+      artist: best.artistName,
+      album: best.collectionName,
+      art: bigArtwork(best.artworkUrl100)
+    };
   }
+
+  function applyMatch(match, seq) {
+    if (!match) return;
+    // A bare title gets the matched artist filled in. A typed artist is left
+    // alone, so a wrong match can never rewrite what you wrote.
+    if (match.artist && !identity.artist) artistEl.textContent = match.artist;
+    if (match.artist) updateLinks(identity.artist || match.artist, identity.title);
+    if (match.art) loadArt(match.art, seq);
+  }
+
   function identify(artist, title, seq) {
-    var key = (artist || '') + '\u0000' + (title || '');
-    if (key in idCache) {
-      var hit = idCache[key];
-      if (hit && hit.cover && seq === artSeq) loadArt('/api/art?url=' + encodeURIComponent(hit.cover), seq);
-      return;
-    }
-    var wait = Math.max(0, 1100 - (Date.now() - lastLookup));
+    if (!title) return;
+    var key = normName(artist) + '|' + normName(title);
+    if (key in artCache) { applyMatch(artCache[key], seq); return; }
     var mySeq = ++idSeq;
+    var wait = Math.max(0, 400 - (Date.now() - lastLookup));
     setTimeout(function () {
-      if (mySeq !== idSeq) return;   // superseded by a newer lookup
+      if (mySeq !== idSeq) return;                        // superseded by a newer lookup
       lastLookup = Date.now();
       var ctrl = new AbortController();
-      var kill = setTimeout(function () { ctrl.abort(); }, 6000);
-      fetch('https://musicbrainz.org/ws/2/recording/?query=' +
-            encodeURIComponent(haveArtistQuery(artist, title)) + '&fmt=json&limit=5&inc=releases',
-            { signal: ctrl.signal })
+      var kill = setTimeout(function () { ctrl.abort(); }, 7000);
+      fetch(itunesQuery(artist, title), { signal: ctrl.signal })
         .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
         .then(function (j) {
-          var m = pickMatch(j.recordings || [], artist, title);
-          idCache[key] = m;
-          if (m && m.cover && seq === artSeq) {
-            loadArt('/api/art?url=' + encodeURIComponent(m.cover), seq);
-          }
+          if (mySeq !== idSeq) return;
+          var m = pickTrack(j.results, artist, title);
+          artCache[key] = m;
+          if (DEBUG) window.__viz.lookup = 'n=' + ((j.results || []).length) + ';pick=' + (m ? 'yes' : 'no');
+          applyMatch(m, seq);
         })
-        .catch(function () {})
+        .catch(function (e) {                            // offline / rate-limited: keep the placeholder
+          if (DEBUG) window.__viz.lookup = 'err:' + (e && e.name);   // eslint-disable-line no-unused-vars
+          // A page opened straight from disk is an opaque origin: browsers
+          // block its cross-origin fetches even though the API allows them,
+          // so say why rather than silently showing nothing.
+          setStatus(location.protocol === 'file:'
+            ? 'cover lookup needs an http(s) page — open the hosted copy or serve this folder'
+            : 'no cover art found — check the spelling or your connection', true);
+        })
         .then(function () { clearTimeout(kill); });
     }, wait);
   }
 
-  // --- State polling ----------------------------------------------------
-  function onState(st) {
-    serverOk = true;
-    state = st;
-    stateAt = performance.now();
-    if (fileMode) return;
-    if (!st.ok) {
-      lastKey = null;
-      titleEl.textContent = 'Nothing playing';
-      artistEl.textContent = 'Play anything on your system — visualise listens to it';
-      titleWrap.classList.remove('marquee');
-      artFrame.dataset.hasArt = 'false';
-      artFrame.dataset.playing = 'false';
-      clearCoverColour();
-      servicesEl.classList.remove('shown');
-      seekRow.classList.add('off');
-      setStatus('waiting for a player…');
-      updatePlayIcon();
-      return;
-    }
-    var key = st.player + '|' + (st.trackid || st.title);
-    if (key !== lastKey) { lastKey = key; setTrack(st.title, st.artist, st.artUrl); }
-    artFrame.dataset.playing = st.status === 'Playing' ? 'true' : 'false';
-    seekRow.classList.toggle('off', !(st.length > 0));
-    updateLinks(st.artist, st.title);
-    updatePlayIcon();
-    setStatus(st.player + ' · ' + (st.status || ''));
-  }
-
-  function poll() {
-    return fetch('/api/state', { cache: 'no-store' }).then(function (r) { return r.json(); })
-      .then(onState)
-      .catch(function () {
-        serverOk = false;
-        setStatus('helper offline — run: python3 serve.py', true);
-      });
-  }
-  poll();
-  setInterval(poll, 1000);
-
-  function send(action, value) {
-    fetch('/api/control', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: action, value: value })
-    }).catch(function () {});
-    setTimeout(poll, 260);
-  }
-
-  prevBtn.addEventListener('click', function () { if (!fileMode) send('previous'); });
-  nextBtn.addEventListener('click', function () { if (!fileMode) send('next'); });
+  // --- Primary action + identity field ----------------------------------
   playBtn.addEventListener('click', function () {
     if (fileMode) { toggleFile(); return; }
-    send('play-pause');
+    if (captureStream) { stopCapture(false); return; }
+    startCapture();
   });
 
+  idGo.addEventListener('click', function () { setIdentity(idInput.value); idInput.blur(); });
+  idInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); setIdentity(idInput.value); idInput.blur(); }
+  });
+
+  // --- Embedded cover art -----------------------------------------------
+  // Reads APIC/PIC out of ID3v2, covr out of MP4/M4A and PICTURE out of FLAC
+  // straight from a dropped file: real art, offline, and readable pixels for
+  // the colour engine (a blob URL is never tainted). Ogg is deliberately not
+  // handled. Returns { mime, bytes } or null, and never throws.
+  function extractEmbeddedArt(bytes) {
+    'use strict';
+
+    /* ------------------------------------------------------------------ */
+    /* input normalisation                                                 */
+    /* ------------------------------------------------------------------ */
+
+    function normalise(input) {
+      try {
+        if (input === null || input === undefined) return null;
+        if (typeof ArrayBuffer === 'undefined') return null;
+        if (ArrayBuffer.isView && ArrayBuffer.isView(input)) {
+          if (input.byteLength === 0) return null;
+          return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
+        }
+        if (input instanceof ArrayBuffer) {
+          return input.byteLength === 0 ? null : new Uint8Array(input);
+        }
+        if (typeof SharedArrayBuffer !== 'undefined' && input instanceof SharedArrayBuffer) {
+          return input.byteLength === 0 ? null : new Uint8Array(input);
+        }
+        if (typeof input.length === 'number' && input.length > 0) {
+          var copy = new Uint8Array(input.length);
+          for (var i = 0; i < input.length; i++) copy[i] = input[i] & 0xff;
+          return copy;
+        }
+        return null;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* byte helpers                                                        */
+    /* ------------------------------------------------------------------ */
+
+    function readU32(buf, off) {
+      return ((buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3]) >>> 0;
+    }
+
+    function readU24(buf, off) {
+      return (buf[off] << 16) | (buf[off + 1] << 8) | buf[off + 2];
+    }
+
+    // 4 bytes, 7 significant bits each
+    function readSynchsafe(buf, off) {
+      return ((buf[off] & 0x7f) << 21) | ((buf[off + 1] & 0x7f) << 14) |
+             ((buf[off + 2] & 0x7f) << 7) | (buf[off + 3] & 0x7f);
+    }
+
+    function latin1(buf, start, end) {
+      var out = '';
+      for (var i = start; i < end && i < buf.length; i++) out += String.fromCharCode(buf[i]);
+      return out;
+    }
+
+    function startsWithAscii(buf, off, str) {
+      if (off + str.length > buf.length) return false;
+      for (var i = 0; i < str.length; i++) {
+        if (buf[off + i] !== str.charCodeAt(i)) return false;
+      }
+      return true;
+    }
+
+    // Return the index just past the terminator, or -1.
+    function findTerminator(buf, start, end, wide) {
+      var i;
+      if (wide) {
+        // UTF-16: terminator is two zero bytes on an even offset from start.
+        i = start;
+        while (i + 1 < end) {
+          if (buf[i] === 0 && buf[i + 1] === 0) return i + 2;
+          i += 2;
+        }
+        return -1;
+      }
+      for (i = start; i < end; i++) {
+        if (buf[i] === 0) return i + 1;
+      }
+      return -1;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* image type sniffing                                                 */
+    /* ------------------------------------------------------------------ */
+
+    function sniffMime(buf, start, end) {
+      var n = end - start;
+      if (n >= 3 && buf[start] === 0xff && buf[start + 1] === 0xd8 && buf[start + 2] === 0xff) {
+        return 'image/jpeg';
+      }
+      if (n >= 8 && buf[start] === 0x89 && buf[start + 1] === 0x50 && buf[start + 2] === 0x4e &&
+          buf[start + 3] === 0x47 && buf[start + 4] === 0x0d && buf[start + 5] === 0x0a &&
+          buf[start + 6] === 0x1a && buf[start + 7] === 0x0a) {
+        return 'image/png';
+      }
+      if (n >= 6 && buf[start] === 0x47 && buf[start + 1] === 0x49 && buf[start + 2] === 0x46 &&
+          buf[start + 3] === 0x38) {
+        return 'image/gif';
+      }
+      if (n >= 12 && startsWithAscii(buf, start, 'RIFF') && startsWithAscii(buf, start + 8, 'WEBP')) {
+        return 'image/webp';
+      }
+      if (n >= 2 && buf[start] === 0x42 && buf[start + 1] === 0x4d) {
+        return 'image/bmp';
+      }
+      return null;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* candidate collection + selection                                    */
+    /* ------------------------------------------------------------------ */
+
+    // A candidate is { mime, bytes, type, len }. `type` is the ID3/FLAC picture
+    // type (3 = front cover); undefined for MP4 entries.
+    function addCandidate(cands, buf, dataStart, dataEnd, declaredMime, pictureType) {
+      if (dataEnd <= dataStart) return;
+      var declared = (declaredMime || '').replace(/^\s+|\s+$/g, '').toLowerCase();
+      // "-->" means the picture is a URL, not embedded data.
+      if (declared === '-->') return;
+      var mime = sniffMime(buf, dataStart, dataEnd);
+      if (!mime && declared && declared.indexOf('image/') === 0) mime = declared;
+      if (!mime) return;
+      var data = buf.slice(dataStart, dataEnd); // copy, independent of source
+      cands.push({ mime: mime, bytes: data, type: pictureType, len: data.length });
+    }
+
+    // Prefer ID3/FLAC front cover (type 3), else the largest picture.
+    function selectBest(cands) {
+      if (!cands.length) return null;
+      var i, front = null, best = cands[0];
+      for (i = 0; i < cands.length; i++) {
+        if (cands[i].type === 3 && (front === null || cands[i].len > front.len)) {
+          front = cands[i];
+        }
+        if (cands[i].len > best.len) best = cands[i];
+      }
+      var pick = front || best;
+      return { mime: pick.mime, bytes: pick.bytes };
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* ID3v2                                                               */
+    /* ------------------------------------------------------------------ */
+
+    // Remove unsynchronisation: every 0xFF 0x00 becomes 0xFF.
+    function deunsync(buf, start, end) {
+      var i, count = 0;
+      for (i = start; i + 1 < end; i++) {
+        if (buf[i] === 0xff && buf[i + 1] === 0x00) { count++; i++; }
+      }
+      if (count === 0) return buf.slice(start, end);
+      var out = new Uint8Array((end - start) - count);
+      var j = 0;
+      for (i = start; i < end; i++) {
+        out[j++] = buf[i];
+        if (buf[i] === 0xff && i + 1 < end && buf[i + 1] === 0x00) i++;
+      }
+      return out;
+    }
+
+    function apicV23(body, start, end, cands) {
+      if (start >= end) return;
+      var enc = body[start];
+      var p = start + 1;
+      var mimeEnd = -1;
+      for (var i = p; i < end; i++) {
+        if (body[i] === 0) { mimeEnd = i; break; }
+      }
+      if (mimeEnd < 0) return;
+      var mime = latin1(body, p, mimeEnd);
+      p = mimeEnd + 1;
+      if (p >= end) return;
+      var pictureType = body[p];
+      p += 1;
+      var wide = (enc === 1 || enc === 2);
+      var dataStart = findTerminator(body, p, end, wide);
+      if (dataStart < 0) return;
+      addCandidate(cands, body, dataStart, end, mime, pictureType);
+    }
+
+    function picV22(body, start, end, cands) {
+      if (start + 5 > end) return;
+      var enc = body[start];
+      var fmt = latin1(body, start + 1, start + 4).toUpperCase();
+      var pictureType = body[start + 4];
+      var p = start + 5;
+      var mime = '';
+      if (fmt === 'JPG' || fmt === 'JPEG') mime = 'image/jpeg';
+      else if (fmt === 'PNG') mime = 'image/png';
+      else if (fmt === 'GIF') mime = 'image/gif';
+      else if (fmt === 'BMP') mime = 'image/bmp';
+      var wide = (enc === 1 || enc === 2);
+      var dataStart = findTerminator(body, p, end, wide);
+      if (dataStart < 0) return;
+      addCandidate(cands, body, dataStart, end, mime, pictureType);
+    }
+
+    function id3TagEnd(buf) {
+      if (buf.length < 10 || !startsWithAscii(buf, 0, 'ID3')) return 0;
+      var size = readSynchsafe(buf, 6);
+      var end = 10 + size;
+      if (buf[5] & 0x10) end += 10; // v2.4 footer, lives after the body
+      return end;
+    }
+
+    function tryId3(buf) {
+      if (buf.length < 10) return null;
+      if (!startsWithAscii(buf, 0, 'ID3')) return null;
+      var major = buf[3];
+      var flags = buf[5];
+      var size = readSynchsafe(buf, 6);
+      if (size <= 0) return null;
+
+      var tagEnd = 10 + size;
+      if (tagEnd > buf.length) tagEnd = buf.length; // truncated tag: parse what we have
+
+      var body = (flags & 0x80) ? deunsync(buf, 10, tagEnd) : buf.slice(10, tagEnd);
+      var pos = 0;
+
+      // Extended header: v2.4 size is synchsafe and includes its own 4 bytes;
+      // v2.3 size is plain big-endian and excludes its own 4 bytes.
+      if (flags & 0x40) {
+        if (body.length < 4) return null;
+        if (major >= 4) {
+          pos = readSynchsafe(body, 0);
+        } else {
+          pos = 4 + readU32(body, 0);
+        }
+      }
+
+      var cands = [];
+      var frameLen = (major === 2) ? 6 : 10;
+      var guard = 0;
+      while (pos + frameLen <= body.length && guard++ < 200000) {
+        var idLen = (major === 2) ? 3 : 4;
+        var id = latin1(body, pos, pos + idLen);
+
+        // Padding: an all-zero frame id ends the tag.
+        var allZero = true;
+        for (var z = 0; z < idLen; z++) {
+          if (body[pos + z] !== 0) { allZero = false; break; }
+        }
+        if (allZero) break;
+        if (!/^[A-Z0-9]+$/.test(id)) break; // bad frame id
+
+        var fsize;
+        if (major === 2) fsize = readU24(body, pos + 3);
+        else if (major === 4) fsize = readSynchsafe(body, pos + 4);
+        else fsize = readU32(body, pos + 4);
+
+        var dataStart = pos + frameLen;
+        var dataEnd = dataStart + fsize;
+        if (fsize <= 0 || dataEnd > body.length) break; // malformed / runs past end
+
+        if (major !== 2 && id === 'APIC') apicV23(body, dataStart, dataEnd, cands);
+        else if (major === 2 && id === 'PIC') picV22(body, dataStart, dataEnd, cands);
+
+        pos = dataEnd;
+      }
+
+      return selectBest(cands);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* FLAC                                                                */
+    /* ------------------------------------------------------------------ */
+
+    function flacPicture(buf, start, end, cands) {
+      var p = start;
+      if (p + 8 > end) return;
+      var pictureType = readU32(buf, p); p += 4;
+      var mimeLen = readU32(buf, p); p += 4;
+      if (p + mimeLen > end) return;
+      var mime = latin1(buf, p, p + mimeLen); p += mimeLen;
+      if (p + 4 > end) return;
+      var descLen = readU32(buf, p); p += 4;
+      if (p + descLen > end) return;
+      p += descLen;
+      if (p + 20 > end) return; // width, height, depth, colors, data length
+      p += 16;
+      var dataLen = readU32(buf, p); p += 4;
+      if (dataLen === 0 || p + dataLen > end) return;
+      addCandidate(cands, buf, p, p + dataLen, mime, pictureType);
+    }
+
+    function tryFlac(buf, base) {
+      if (base + 4 > buf.length) return null;
+      if (!startsWithAscii(buf, base, 'fLaC')) return null;
+      var pos = base + 4;
+      var cands = [];
+      var guard = 0;
+      while (pos + 4 <= buf.length && guard++ < 200000) {
+        var head = buf[pos];
+        var last = (head & 0x80) !== 0;
+        var type = head & 0x7f;
+        var len = readU24(buf, pos + 1);
+        var bodyStart = pos + 4;
+        var bodyEnd = bodyStart + len;
+        if (type === 127) break; // invalid
+        if (bodyEnd > buf.length) break; // truncated
+        if (type === 6) flacPicture(buf, bodyStart, bodyEnd, cands);
+        pos = bodyEnd;
+        if (last) break;
+      }
+      return selectBest(cands);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* MP4 / M4A                                                           */
+    /* ------------------------------------------------------------------ */
+
+    var KNOWN_TOP = {
+      ftyp: 1, moov: 1, mdat: 1, free: 1, skip: 1, wide: 1, pnot: 1,
+      styp: 1, uuid: 1, meta: 1, moof: 1, mfra: 1
+    };
+
+    // Parse one box header. Returns { type, dataStart, end } or null.
+    function boxAt(buf, pos, limit) {
+      if (pos + 8 > limit) return null;
+      var size = readU32(buf, pos);
+      var type = latin1(buf, pos + 4, pos + 8);
+      var header = 8;
+      if (size === 1) {
+        if (pos + 16 > limit) return null;
+        var hi = readU32(buf, pos + 8);
+        var lo = readU32(buf, pos + 12);
+        if (hi > 0x1fffff) return null; // > 2^53, refuse
+        size = hi * 4294967296 + lo;
+        header = 16;
+      } else if (size === 0) {
+        size = limit - pos; // extends to end of file
+      }
+      if (size < header) return null;
+      var end = pos + size;
+      if (end > limit) end = limit;
+      return { type: type, dataStart: pos + header, end: end };
+    }
+
+    function walkCovr(buf, start, limit, cands) {
+      var pos = start, guard = 0;
+      while (pos + 8 <= limit && guard++ < 100000) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        if (box.type === 'data' && box.end - box.dataStart >= 8) {
+          var dtype = readU32(buf, box.dataStart);
+          var low = dtype & 0xff;
+          var code = 0;
+          if (dtype === 13 || low === 13 || (dtype & 0xffffff) === 13) code = 13;
+          else if (dtype === 14 || low === 14 || (dtype & 0xffffff) === 14) code = 14;
+          var declared = code === 13 ? 'image/jpeg' : (code === 14 ? 'image/png' : '');
+          addCandidate(cands, buf, box.dataStart + 8, box.end, declared, undefined);
+        }
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+    }
+
+    function walkIlst(buf, start, limit, cands) {
+      var pos = start, guard = 0;
+      while (pos + 8 <= limit && guard++ < 100000) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        if (box.type === 'covr') walkCovr(buf, box.dataStart, box.end, cands);
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+    }
+
+    function walkMeta(buf, start, limit, cands) {
+      var pos = start, guard = 0;
+      while (pos + 8 <= limit && guard++ < 100000) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        if (box.type === 'ilst') walkIlst(buf, box.dataStart, box.end, cands);
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+    }
+
+    function walkUdta(buf, start, limit, cands) {
+      var pos = start, guard = 0;
+      while (pos + 8 <= limit && guard++ < 100000) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        // 'meta' is a full box: 4 bytes of version/flags precede its children.
+        if (box.type === 'meta') walkMeta(buf, box.dataStart + 4, box.end, cands);
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+    }
+
+    function walkMoov(buf, start, limit, cands) {
+      var pos = start, guard = 0;
+      while (pos + 8 <= limit && guard++ < 100000) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        if (box.type === 'udta') walkUdta(buf, box.dataStart, box.end, cands);
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+    }
+
+    function tryMp4(buf) {
+      if (buf.length < 8) return null;
+      // Only attempt an atom walk when the file plausibly is an MP4 container.
+      if (!KNOWN_TOP[latin1(buf, 4, 8)]) return null;
+      var cands = [];
+      var pos = 0, guard = 0;
+      while (pos + 8 <= buf.length && guard++ < 100000) {
+        var box = boxAt(buf, pos, buf.length);
+        if (!box) break;
+        if (box.type === 'moov') walkMoov(buf, box.dataStart, box.end, cands);
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+      return selectBest(cands);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* dispatch                                                            */
+    /* ------------------------------------------------------------------ */
+
+    try {
+      var u8 = normalise(bytes);
+      if (!u8) return null;
+
+      if (startsWithAscii(u8, 0, 'ID3')) {
+        var fromId3 = tryId3(u8);
+        if (fromId3) return fromId3;
+        // An ID3 tag may be prepended to a FLAC stream.
+        var afterTag = id3TagEnd(u8);
+        if (afterTag > 0 && afterTag < u8.length) {
+          var flacAfterId3 = tryFlac(u8, afterTag);
+          if (flacAfterId3) return flacAfterId3;
+        }
+        return null;
+      }
+
+      if (startsWithAscii(u8, 0, 'fLaC')) {
+        return tryFlac(u8, 0);
+      }
+
+      // Ogg Vorbis/Opus is intentionally unsupported (see file header).
+      var fromMp4 = tryMp4(u8);
+      if (fromMp4) return fromMp4;
+
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // --- File fallback (drag & drop anywhere) -----------------------------
+  // Silent, no button: the page is about capturing what is already playing,
+  // but a dropped file still works — and its embedded cover art is read
+  // straight out of the file, so the colour drench works offline too.
+  function fileArt(file) {
+    // Whole file for normal sizes (MP4 keeps its tag at either end), a prefix
+    // for big ones. Never throws: a file with no art just returns null.
+    var slice = file.size <= 32 * 1024 * 1024 ? file : file.slice(0, 16 * 1024 * 1024);
+    return slice.arrayBuffer().then(function (buf) {
+      var got = extractEmbeddedArt(new Uint8Array(buf));
+      if (!got || !got.bytes) return null;
+      if (artObjectUrl) URL.revokeObjectURL(artObjectUrl);
+      artObjectUrl = URL.createObjectURL(new Blob([got.bytes], { type: got.mime }));
+      return artObjectUrl;
+    }).catch(function () { return null; });
+  }
+
   function loadFile(file) {
     ensureAudio().then(function () {
-      stopSystemAudio();
       fileMode = true;
+      if (captureStream) stopCapture(true);
       if (!fileSource) fileSource = audioCtx.createMediaElementSource(player);
       try { fileSource.disconnect(); } catch (e) {}
       fileSource.connect(analyser);
-      fileSource.connect(audioCtx.destination);   // local file is audible
+      fileSource.connect(audioCtx.destination);   // a local file is audible
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       objectUrl = URL.createObjectURL(file);
       player.src = objectUrl;
       var names = parseName(file.name);
+      identity = { artist: names.artist, title: names.title, bare: names.artist === 'Local file' };
       titleEl.textContent = names.title;
-      artistEl.textContent = names.artist;
+      artistEl.textContent = names.artist === 'Local file' ? '' : names.artist;
       marquee();
       updateLinks(names.artist, names.title);
       seekRow.classList.remove('off');
+      idRow.classList.add('off');
       artFrame.dataset.hasArt = 'false';
       artFrame.dataset.playing = 'true';
       clearCoverColour();
       enterArt();
       var seq = ++artSeq;
-      identify(names.artist, names.title, seq);
+      fileArt(file).then(function (blobUrl) {
+        if (seq !== artSeq) return;
+        if (blobUrl) loadArt(blobUrl, seq);
+        else identify(names.artist, names.title, seq);
+      });
       player.play().catch(function () {});
-      updatePlayIcon();
+      updatePrimary();
       setStatus('local file · ' + file.name);
     });
   }
   function toggleFile() {
     if (player.paused) player.play().catch(function () {}); else player.pause();
-    updatePlayIcon();
     artFrame.dataset.playing = player.paused ? 'false' : 'true';
+    updatePrimary();
   }
+  player.addEventListener('play', updatePrimary);
+  player.addEventListener('pause', updatePrimary);
   player.addEventListener('ended', function () {
     fileMode = false;
-    lastKey = null;
-    startSystemAudio();
-    poll();
+    updatePrimary();
+    setStatus('file finished');
   });
 
   ['dragover', 'dragenter'].forEach(function (ev) {
@@ -1056,15 +1664,10 @@ registerProcessor('pcm-feed', PCMFeed);
     return { artist: 'Local file', title: base };
   }
 
-  // --- Seeking ----------------------------------------------------------
+  // --- Seeking (files only) ---------------------------------------------
   function seekTo(fraction) {
     if (fileMode && isFinite(player.duration) && player.duration > 0) {
       player.currentTime = Math.max(0, Math.min(1, fraction)) * player.duration;
-    } else if (state && state.ok && state.length > 0) {
-      var t = Math.max(0, Math.min(1, fraction)) * state.length;
-      state.position = t;
-      stateAt = performance.now();
-      send('seek', t);
     }
   }
   seekEl.addEventListener('pointerdown', function (e) {
@@ -1087,11 +1690,6 @@ registerProcessor('pcm-feed', PCMFeed);
   function seekBy(delta) {
     if (fileMode && isFinite(player.duration)) {
       player.currentTime = Math.max(0, Math.min(player.duration, player.currentTime + delta));
-    } else if (state && state.ok && state.length > 0) {
-      var t = Math.max(0, Math.min(state.length, state.position + delta));
-      state.position = t;
-      stateAt = performance.now();
-      send('seek', t);
     }
   }
   function eventFraction(e) {
@@ -1105,21 +1703,20 @@ registerProcessor('pcm-feed', PCMFeed);
     if (e.code === 'Space') {
       e.preventDefault();
       if (fileMode) toggleFile();
-      else if (state && state.ok) send('play-pause');
-      else startSystemAudio();
+      else if (captureStream) stopCapture(false);
+      else startCapture();
     } else if (e.key === 'ArrowLeft' && e.target !== seekEl) { e.preventDefault(); seekBy(-5); }
     else if (e.key === 'ArrowRight' && e.target !== seekEl) { e.preventDefault(); seekBy(5); }
   });
 
-  // First gesture unlocks the AudioContext (browser autoplay policy).
-  ['pointerdown', 'keydown'].forEach(function (ev) {
-    window.addEventListener(ev, function once() {
-      window.removeEventListener(ev, once);
-      startSystemAudio();
-    });
-  });
-  // Try immediately too (succeeds when the page already has permission).
-  startSystemAudio();
+  // --- Init -------------------------------------------------------------
+  // Capture always starts from a click (the picker and the AudioContext both
+  // need one), so there is nothing to auto-start here.
+  // ?q= pre-fills and resolves the identity field: used for deterministic
+  // headless screenshots of the art + colour path.
+  if (QUERY) { idRow.classList.remove('off'); setIdentity(QUERY); }
+  setStatus('ready — nothing captured yet');
+  updatePrimary();
 
   // --- Art mode + viz mode toggles --------------------------------------
   function setArtMode(next) {
@@ -1261,21 +1858,21 @@ registerProcessor('pcm-feed', PCMFeed);
   }
 
   // Debug hook for headless verification (also handy in the console).
-  window.__viz = { frames: 0, level: 0, source: 'idle', state: null };
+  window.__viz = { frames: 0, level: 0, source: 'idle', lookup: '-' };
   function debugReport() {
     var cs = getComputedStyle(document.documentElement);
     document.documentElement.dataset.viz =
       'frames=' + window.__viz.frames +
       ';level=' + window.__viz.level.toFixed(4) +
       ';peak=' + levelPeak.toFixed(4) +
-      ';chunks=' + pcmChunks +
-      ';kb=' + Math.round(pcmBytes / 1024) +
       ';source=' + window.__viz.source +
       ';art=' + artFrame.dataset.hasArt +
       ';mode=' + artFrame.dataset.mode +
       ';playing=' + artFrame.dataset.playing +
       ';bg=' + cs.getPropertyValue('--page-bg').trim() +
       ';ink=' + cs.getPropertyValue('--page-ink').trim() +
+      ';lookup=' + window.__viz.lookup +
+      ';status=' + statusEl.textContent.slice(0, 60) +
       ';title=' + titleEl.textContent.slice(0, 30);
   }
 
@@ -1301,23 +1898,40 @@ registerProcessor('pcm-feed', PCMFeed);
       if (window.__viz.level > levelPeak) levelPeak = window.__viz.level;
     }
     window.__viz.frames++;
-    window.__viz.source = fileMode ? 'file' : (streamReader ? 'system' : 'idle');
-    window.__viz.state = state;
-    if (DEBUG && window.__viz.frames % 15 === 0) debugReport();
+    window.__viz.source = fileMode ? 'file' : (captureKind || 'idle');
+    if (DEBUG) debugReport();
 
-    // Progress
+    // Progress (files carry their own duration; a capture has none)
     if (dragging) { /* user scrub wins */ }
     else if (fileMode) {
       var d = isFinite(player.duration) ? player.duration : 0;
       if (d > 0) renderProgress(player.currentTime / d, player.currentTime, d);
-    } else if (state && state.ok && state.length > 0) {
-      var pos = state.position + (state.status === 'Playing' ? (now - stateAt) / 1000 : 0);
-      pos = Math.max(0, Math.min(state.length, pos));
-      renderProgress(pos / state.length, pos, state.length);
     }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+  if (DEBUG) debugReport();   // window.__viz exists by now; idle dumps are meaningful
+
+  // ?selftest=1 — push a synthetic tone through the real capture path. No
+  // permission, no picker and no sound (the analyser branch is muted), so it
+  // is a one-click "do the meters actually move?" check. The tone is fed as a
+  // MediaStream, exactly like a captured tab, so it exercises the same code.
+  if (SELFTEST) {
+    ensureAudio().then(function (ok) {
+      if (!ok) return;
+      var a = audioCtx.createOscillator(), b = audioCtx.createOscillator();
+      a.frequency.value = 110; b.frequency.value = 440;
+      var shape = audioCtx.createGain();
+      shape.gain.value = 0.22;
+      var dest = audioCtx.createMediaStreamDestination();
+      a.connect(shape); b.connect(shape); shape.connect(dest);
+      a.start(); b.start();
+      attachStream(dest.stream, 'tab', '');
+      titleEl.textContent = 'Self test tone';
+      artistEl.textContent = 'synthetic 110 Hz + 440 Hz — the meters should move';
+      setStatus('self test · synthetic tone, nothing captured');
+    });
+  }
 })();
 </script>
 </body>

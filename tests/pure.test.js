@@ -1,47 +1,19 @@
 #!/usr/bin/env node
-/* visualise — pure-function test harness.
-   Extracts functions from index.html by brace matching (no browser needed). */
+/* visualise — pure-function tests.
+
+   The page is a single file, so these functions are pulled out of index.html
+   by brace matching (tests/extract.js) rather than copied here: the tests run
+   the real code the browser runs. No browser and no network needed except the
+   one live iTunes check at the end, which skips itself if it cannot reach it. */
 'use strict';
-const fs = require('fs');
+const { readSource, extract } = require('./extract');
+const source = readSource();
 
-const html = fs.readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
-const m = html.match(/<script>\n([\s\S]*?)\n<\/script>/);
-if (!m) { console.error('FAIL: could not find main script block'); process.exit(1); }
-const source = m[1];
-
-/* --- extract a top-level `  function name(...) { ... }` by brace matching --- */
-function extract(name) {
-  const needle = '\n  function ' + name + '(';
-  const start = source.indexOf(needle);
-  if (start === -1) throw new Error('function not found: ' + name);
-  const from = start + 1;
-  const open = source.indexOf('{', source.indexOf('(', from));
-  let depth = 0, i = open, inStr = null, inRe = false;
-  for (; i < source.length; i++) {
-    const c = source[i], prev = source[i - 1];
-    if (inStr) {
-      if (c === '\\') { i++; continue; }
-      if (c === inStr) inStr = null;
-      continue;
-    }
-    if (inRe) {
-      if (c === '\\') { i++; continue; }
-      if (c === '/') inRe = false;
-      continue;
-    }
-    if (c === '"' || c === "'" || c === '`') { inStr = c; continue; }
-    if (c === '/' && '=(,;:!&|?+*%<>[{'.includes(prev)) { inRe = true; continue; }
-    if (c === '/' && prev === '/') { while (i < source.length && source[i] !== '\n') i++; continue; }
-    if (c === '{') depth++;
-    else if (c === '}') { depth--; if (depth === 0) { i++; break; } }
-  }
-  return source.slice(from, i);
-}
-
-const names = ['hexToRgb', 'parseName', 'fmt', 'bandValue', 'pickRelease', 'pickMatch',
-               'haveArtistQuery', 'srgbLum', 'contrast', 'mixRgb', 'coverInk', 'colourStr', 'parseColour'];
+const names = ['hexToRgb', 'parseName', 'fmt', 'bandValue', 'normName', 'bigArtwork',
+               'itunesQuery', 'pickTrack', 'splitIdentity', 'labelLooksLikeTrack',
+               'srgbLum', 'contrast', 'mixRgb', 'coverInk', 'colourStr', 'parseColour'];
 const preamble = 'var BAR_COUNT = 48;\nvar bins = new Uint8Array(1024);\n';
-const body = names.map(extract).join('\n');
+const body = names.map((n) => extract(source, n)).join('\n');
 const sandbox = new Function(preamble + body + '\nreturn {' + names.join(',') + '};');
 const F = sandbox();
 
@@ -116,51 +88,79 @@ const danger = F.coverInk([250, 249, 247], [0, 0, 0]);
 ok(danger.mix < 0.34, 'mid-grey danger zone reduces the mix (' + danger.mix + ')');
 ok(F.contrast(danger.ink, danger.bg) >= 4.5, 'and still passes after backing off');
 
-console.log('\n--- MusicBrainz matching (offline fixtures) ---');
-ok(F.haveArtistQuery('Radiohead', 'Creep').includes('artist:"Radiohead"'), 'artist query');
-ok(F.haveArtistQuery('Local file', 'Creep') === 'recording:"Creep"', 'title-only query for local files');
-const rels = [
-  { id: 'live-id', title: 'Live at Coachella', status: 'Official', date: '2017-04-14' },
-  { id: 'boot-id', title: 'Creep', status: 'Bootleg', date: '1993-01-01' },
-  { id: 'clean-id', title: 'Pablo Honey', status: 'Official', date: '1993-02-22' },
-  { id: 'later-id', title: 'Greatest Hits', status: 'Official', date: '2008-06-01' }
-];
-ok(F.pickRelease(rels).id === 'clean-id', 'prefers official, non-live, earliest', F.pickRelease(rels));
-ok(F.pickRelease([]) === null && F.pickRelease(null) === null, 'no releases → null');
-const recs = [
-  { score: 100, title: 'Creep', 'artist-credit': [{ name: 'Radiohead' }], releases: [] },
-  { score: 96, title: 'Creep', 'artist-credit': [{ name: 'Radiohead' }],
-    releases: [{ id: 'ph', title: 'Pablo Honey', status: 'Official', date: '1993-02-22' }] }
-];
-ok((F.pickMatch(recs, 'Radiohead', 'Creep') || {}).cover ===
-   'https://coverartarchive.org/release/ph/front-250', 'skips the coverless first hit for one with art');
-ok(F.pickMatch([{ score: 40, title: 'Creep', 'artist-credit': [{ name: 'Nobody' }], releases: [] }],
-   'Radiohead', 'Creep') === null, 'rejects low scores');
-ok(F.pickMatch([{ score: 99, title: 'Creep', 'artist-credit': [{ name: 'Some Cover Band' }],
-   releases: [{ id: 'x', title: 'X', status: 'Official', date: '2000-01-01' }] }], 'Radiohead', 'Creep') === null,
-   'rejects artist mismatch');
-const nocov = F.pickMatch([{ score: 100, title: 'Creep', 'artist-credit': [{ name: 'Radiohead' }], releases: [] }],
-   'Radiohead', 'Creep');
-ok(nocov && nocov.cover === null && nocov.title === 'Creep', 'still returns a coverless match as fallback');
+console.log('\n--- iTunes matching (offline fixtures) ---');
+ok(F.normName('Get Lucky (Radio Edit)') === 'get lucky', 'strips parenthesised suffixes', F.normName('Get Lucky (Radio Edit)'));
+ok(F.normName('Song - Remastered 2011') === 'song', 'strips remaster suffixes', F.normName('Song - Remastered 2011'));
+ok(F.normName('AC/DC') === 'ac dc', 'punctuation collapses to spaces', F.normName('AC/DC'));
+ok(F.bigArtwork('https://is1-ssl.mzstatic.com/image/thumb/x/100x100bb.jpg') ===
+   'https://is1-ssl.mzstatic.com/image/thumb/x/600x600bb.jpg',
+   '100x100bb → 600x600bb', F.bigArtwork('https://is1-ssl.mzstatic.com/image/thumb/x/100x100bb.jpg'));
+ok(F.bigArtwork(null) === null, 'no artwork URL → null');
+ok(F.itunesQuery('Radiohead', 'Creep').indexOf('term=Radiohead%20Creep') !== -1, 'query carries both names');
+ok(F.itunesQuery('Local file', 'Creep').indexOf('term=Creep') !== -1, 'local files query the title alone');
 
-/* --- live API sanity (musicbrainz.org) --- */
+const results = [
+  { trackName: 'Creep', artistName: 'Radiohead', collectionName: 'Pablo Honey', artworkUrl100: 'https://x/100x100bb.jpg' },
+  { trackName: 'Creep (Live)', artistName: 'Some Cover Band', collectionName: 'Tribute', artworkUrl100: 'https://y/100x100bb.jpg' },
+  { trackName: 'Creepin', artistName: 'Radiohead', collectionName: 'Other', artworkUrl100: 'https://z/100x100bb.jpg' }
+];
+const best = F.pickTrack(results, 'Radiohead', 'Creep');
+ok(best && best.title === 'Creep' && best.artist === 'Radiohead', 'exact title + artist wins', best);
+ok(best && best.art === 'https://x/600x600bb.jpg', 'artwork is upgraded to 600x600', best && best.art);
+ok(best && best.album === 'Pablo Honey', 'album carried through');
+const bare = F.pickTrack(results, '', 'Creep');
+ok(bare && bare.artist === 'Radiohead', 'a bare typed title still matches (artist filled in later)', bare);
+ok(F.pickTrack([{ trackName: 'Creep', artistName: 'Some Cover Band', artworkUrl100: 'https://c/100x100bb.jpg' }],
+   'Radiohead', 'Creep') === null, 'artist mismatch is rejected even with an exact title');
+ok(F.pickTrack([{ trackName: 'Bohemian Rhapsody', artistName: 'Queen', artworkUrl100: 'https://q/100x100bb.jpg' }],
+   'Radiohead', 'Creep') === null, 'unrelated result is rejected');
+ok(F.pickTrack([{ trackName: 'Creep', artistName: 'Radiohead' }], 'Radiohead', 'Creep') === null,
+   'a result with no artwork is skipped (art is the point)');
+ok(F.pickTrack([], 'Radiohead', 'Creep') === null && F.pickTrack(null, 'x', 'y') === null, 'empty results → null');
+
+console.log('\n--- typed identity ---');
+const si = F.splitIdentity('Daft Punk - Get Lucky');
+ok(si.artist === 'Daft Punk' && si.title === 'Get Lucky' && si.bare === false, 'splits "Artist - Title"', si);
+const si2 = F.splitIdentity('Get Lucky');
+ok(si2.title === 'Get Lucky' && si2.artist === '' && si2.bare === true, 'bare title stays bare', si2);
+ok(F.splitIdentity('Get Lucky \u2013 Daft Punk').artist === 'Get Lucky', 'splits on an en dash too');
+// regression guard: this must NOT reuse the filename parser, which strips ".ext"
+const si3 = F.splitIdentity('Mr. Brightside');
+ok(si3.title === 'Mr. Brightside' && si3.bare === true, 'does not mistake a dot for a file extension', si3);
+
+console.log('\n--- capture label heuristic (best-effort metadata) ---');
+ok(F.labelLooksLikeTrack('Humans Who Killed Predators With Their Bare Hands - YouTube') === true,
+   'a tab title looks like a track');
+ok(F.labelLooksLikeTrack('Entire Screen') === false, 'picker labels are rejected: Entire Screen');
+ok(F.labelLooksLikeTrack('Screen 1') === false, 'picker labels are rejected: Screen 1');
+ok(F.labelLooksLikeTrack('Chrome Tab') === false, 'picker labels are rejected: Chrome Tab');
+ok(F.labelLooksLikeTrack('') === false && F.labelLooksLikeTrack(null) === false, 'empty label');
+ok(F.labelLooksLikeTrack('12345') === false && F.labelLooksLikeTrack('tab') === false, 'no letters / too short');
+
+/* --- live API sanity (itunes.apple.com) --- */
 async function live() {
-  console.log('\n--- MusicBrainz live API ---');
-  const q = encodeURIComponent(F.haveArtistQuery('Radiohead', 'Creep'));
-  const r = await fetch('https://musicbrainz.org/ws/2/recording/?query=' + q + '&fmt=json&limit=5&inc=releases',
-    { headers: { 'User-Agent': 'visualise-test/2.0 (local test)' } });
-  if (r.status === 503) {
-    console.log('  skip MusicBrainz rate-limited us (503) — offline fixtures still cover the logic');
-    console.log('\n' + (fail === 0 ? 'ALL PASS (live check skipped)' : fail + ' FAILURE(S)') + '  (' + pass + ' assertions)');
-    process.exit(fail === 0 ? 0 : 1);
+  console.log('\n--- iTunes live API ---');
+  let j = null;
+  try {
+    const r = await fetch(F.itunesQuery('Radiohead', 'Creep'));
+    ok(r.ok, 'search returns 200 (got ' + r.status + ')');
+    if (r.ok) j = await r.json();
+  } catch (e) {
+    console.log('  skip iTunes unreachable: ' + e.message);
   }
-  ok(r.ok, 'search returns 200 (got ' + r.status + ')');
-  const j = await r.json();
-  const match = F.pickMatch(j.recordings || [], 'Radiohead', 'Creep');
-  ok(!!match, 'found a match for Radiohead — Creep');
-  ok(match && match.cover && match.cover.startsWith('https://coverartarchive.org/release/'),
-     'match carries a cover URL', match && match.cover);
-  console.log('  → ' + (match ? match.artist + ' — ' + match.title : 'none'));
+  if (j) {
+    const m = F.pickTrack(j.results || [], 'Radiohead', 'Creep');
+    ok(!!m, 'found a match for Radiohead — Creep');
+    ok(m && m.art && m.art.indexOf('600x600') !== -1, 'match carries 600x600 artwork', m && m.art);
+    console.log('  -> ' + (m ? m.artist + ' — ' + m.title + ' (' + m.album + ')' : 'none'));
+    if (m && m.art) {
+      // The colour engine reads pixels off this image, which silently fails on
+      // a tainted canvas — so the host MUST send Access-Control-Allow-Origin.
+      const a = await fetch(m.art, { headers: { Origin: 'https://liqwidcell-dot.github.io' } });
+      const acao = a.headers.get('access-control-allow-origin');
+      ok(acao === '*', 'artwork host allows cross-origin reads (ACAO *)', acao);
+    }
+  }
 
   console.log('\n' + (fail === 0 ? 'ALL PASS' : fail + ' FAILURE(S)') + '  (' + pass + ' assertions)');
   process.exit(fail === 0 ? 0 : 1);
