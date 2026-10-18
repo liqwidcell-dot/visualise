@@ -26,6 +26,19 @@ Wrong Title.mp3` shows what the tags say); a file with no tags falls back to the
 `Artist - Title.mp3` convention and says so. Or add `?selftest=1` for a silent
 synthetic tone that proves the meters move, with no permission needed.
 
+## The helper edition
+
+An earlier version needed a small local helper to hear the machine's own audio:
+`serve.py` recorded the default sink's monitor source with `parec` and streamed
+it in, read the track and transport from MPRIS with `playerctl`, and proxied
+cover art so the canvas could read it. That is what made **system audio** —
+everything the computer is playing — possible, and no browser can do it alone on
+Linux.
+
+It is kept, frozen and unmaintained, in [`with-helper/`](with-helper/): run
+`python3 with-helper/serve.py`. This page is the zero-install one; that folder
+is the other edition, with its own README.
+
 ## What it can capture
 
 Capture is capability-driven, not user-agent sniffed — it tries the best route it
@@ -114,5 +127,6 @@ three suites. Each pulls the real functions out of `index.html` by brace matchin
 ## Files
 
 `index.html` is the whole product: markup, design tokens, styling and script.
-`tests/` holds the three suites and the shared extractor. The working journal is
+`tests/` holds the three suites and the shared extractor. `with-helper/` holds
+the frozen earlier edition that needed the Python helper. The working journal is
 deliberately not in this repo.
