@@ -18,10 +18,13 @@ and pulsing on beats.
    and the service links follow from that name — a web page cannot read another
    app's metadata, so the page asks rather than guesses.
 
-Nothing to play? Drop an audio file anywhere on the page: it plays locally and
-the analyser runs on it, and any embedded cover art is read straight from the
-file. Or add `?selftest=1` for a silent synthetic tone that proves the meters
-move, with no permission needed.
+Nothing to play? Drop an audio file anywhere on the page: it plays locally, the
+analyser runs on it, and its own tags are read straight from the bytes — title,
+artist, album, year, track and genre, plus any embedded cover art. A file whose
+name lies about its contents gets the right name from its tags (`Wrong Artist -
+Wrong Title.mp3` shows what the tags say); a file with no tags falls back to the
+`Artist - Title.mp3` convention and says so. Or add `?selftest=1` for a silent
+synthetic tone that proves the meters move, with no permission needed.
 
 ## What it can capture
 
@@ -45,16 +48,23 @@ can actually get:
 There is no microphone path: this is for visualising what is already playing, not
 for listening to the room.
 
-## Cover art
+## Cover art and tags
 
 - **Typed names** are looked up on the [iTunes Search
   API](https://performance-partners.apple.com/search-api) — keyless, CORS-open,
   artwork included. MusicBrainz/Cover Art Archive was dropped: archive.org sends
   no `Access-Control-Allow-Origin`, so the canvas would be tainted and the colour
   engine could never read the pixels.
-- **Dropped files** carry their own art: ID3v2 (`APIC`/`PIC`), MP4 `covr` and
-  FLAC `PICTURE` are read directly from the bytes. Front cover wins, else the
-  largest. Ogg is deliberately unsupported. This path is offline — no lookup.
+- **Dropped files** carry their own art and their own names, and one pass over
+  the bytes reads both: ID3v2 (`APIC`/`PIC`, `TIT2`/`TPE1`/`TALB`/`TYER`/…, v2.2
+  through v2.4, utf-8/utf-16/latin-1), MP4 (`covr`, plus the `©nam`/`©ART`/…
+  `ilst` atoms) and FLAC (`PICTURE`, plus Vorbis comments). Front cover wins,
+  else the largest. Ogg is deliberately unsupported. This path is offline — no
+  lookup.
+- **Tags beat the filename.** A file tagged inside shows what the tags say, and
+  the status line says where the name came from. Tags with no title or artist
+  still fall back to the filename, and say that instead of pretending. Only when
+  the file brings no art is the name looked up for one.
 - A typed artist is never overwritten by a match; a bare title gets the matched
   artist filled in.
 - Opened straight from disk (`file://`) browsers block the cross-origin lookup,
@@ -82,26 +92,27 @@ case over 14 covers × 2 themes is 4.58:1. Honours `prefers-reduced-motion`.
 ## Debug flags
 
 `?debug=1` mirrors live state into `<html data-viz>` — frames, level, peak,
-source, art, art mode, background/ink, the last lookup and the status line. It is
-how the tests read the page and it is handy in DevTools. `?q=Artist+-+Title`
-pre-fills and resolves the identity field, and `?selftest=1` pushes a silent
-synthetic tone through the real capture path. All three are for deterministic
-screenshots and checks.
+source, art, art mode, background/ink, the last lookup, the tags read from a
+dropped file and the status line. It is how the tests read the page and it is
+handy in DevTools. `?q=Artist+-+Title` pre-fills and resolves the identity
+field, and `?selftest=1` pushes a silent synthetic tone through the real capture
+path. All three are for deterministic screenshots and checks.
 
 ## Tests
 
 ```sh
 node tests/pure.test.js          # colour/contrast engine, name matching, parsing
 node tests/embedded-art.test.js  # embedded cover art, every supported format
+node tests/file-tags.test.js     # dropped-file tags: ID3v2.2/2.3/2.4, FLAC, MP4
 ```
 
-Plain `node`, no dependencies and no `package.json`. Both suites pull the real
-functions out of `index.html` by brace matching (`tests/extract.js`) instead of
-keeping copies, so they test exactly what ships. `pure.test.js` ends with one
-live iTunes call and skips it when offline.
+Plain `node`, no dependencies and no `package.json` — 179 assertions across the
+three suites. Each pulls the real functions out of `index.html` by brace matching
+(`tests/extract.js`) instead of keeping copies, so they test exactly what ships.
+`pure.test.js` ends with one live iTunes call and skips it when offline.
 
 ## Files
 
 `index.html` is the whole product: markup, design tokens, styling and script.
-`tests/` holds the two suites and the shared extractor. The working journal is
+`tests/` holds the three suites and the shared extractor. The working journal is
 deliberately not in this repo.

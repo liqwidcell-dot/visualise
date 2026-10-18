@@ -11,7 +11,8 @@ const source = readSource();
 
 const names = ['hexToRgb', 'parseName', 'fmt', 'bandValue', 'normName', 'bigArtwork',
                'itunesQuery', 'pickTrack', 'splitIdentity', 'labelLooksLikeTrack',
-               'srgbLum', 'contrast', 'mixRgb', 'coverInk', 'colourStr', 'parseColour'];
+               'srgbLum', 'contrast', 'mixRgb', 'coverInk', 'colourStr', 'parseColour',
+               'mergeFileNames', 'tagSummary'];
 const preamble = 'var BAR_COUNT = 48;\nvar bins = new Uint8Array(1024);\n';
 const body = names.map((n) => extract(source, n)).join('\n');
 const sandbox = new Function(preamble + body + '\nreturn {' + names.join(',') + '};');
@@ -38,6 +39,54 @@ ok(JSON.stringify(F.parseName('Boards of Canada - Roygbiv.mp3')) ===
    JSON.stringify({ artist: 'Boards of Canada', title: 'Roygbiv' }), 'Artist - Title.ext');
 ok(JSON.stringify(F.parseName('roygbiv.flac')) ===
    JSON.stringify({ artist: 'Local file', title: 'roygbiv' }), 'bare filename');
+
+console.log('\n--- file tags beat the filename ---');
+{
+  const name = F.parseName('Boards of Canada - Roygbiv.mp3');
+  const bare = F.parseName('roygbiv.flac');
+  // Field order is not part of the contract, so compare a canonical rendering.
+  const m = (fromName, tags) => {
+    const r = F.mergeFileNames(fromName, tags);
+    return r.artist + ' | ' + r.title + ' | ' + r.fromTags;
+  };
+
+  // Both tags: they win outright.
+  ok(m(name, { artist: 'Autechre', title: 'Amber' }) === 'Autechre | Amber | true',
+     'tags override the filename', m(name, { artist: 'Autechre', title: 'Amber' }));
+  // Title tag only: the credit is unknown, so it stays blank rather than
+  // claiming the filename author.
+  ok(m(name, { title: 'Amber' }) === ' | Amber | true',
+     'a title-tag-only file leaves the artist blank', m(name, { title: 'Amber' }));
+  // Tags that carry no name at all: the filename still supplies one, and the
+  // caller is told it was not from the tags.
+  ok(m(name, { album: 'Amber' }) === 'Boards of Canada | Roygbiv | false',
+     'an album-only tag set falls back to the filename', m(name, { album: 'Amber' }));
+  ok(m(bare, { album: 'Amber' }) === ' | roygbiv | false',
+     'and a bare filename never invents an artist', m(bare, { album: 'Amber' }));
+  ok(m(bare, null) === ' | roygbiv | false',
+     'no tags at all: bare title, no artist, not from tags', m(bare, null));
+  ok(m(name, null) === 'Boards of Canada | Roygbiv | false',
+     'no tags at all: the filename convention still applies', m(name, null));
+  ok(m(name, {}) === 'Boards of Canada | Roygbiv | false',
+     'an empty tag set is treated as no tags', m(name, {}));
+
+  ok(F.tagSummary(null) === '', 'tagSummary of nothing is empty');
+  ok(F.tagSummary({}) === '', 'tagSummary of an empty set is empty');
+  ok(F.tagSummary({ title: 'Amber', artist: 'Autechre' }) === 'Autechre',
+     'tagSummary does not repeat the title');
+  ok(F.tagSummary({ artist: 'Autechre', album: 'Amber', year: '1994', track: '3', genre: 'IDM' }) ===
+     'Autechre | Amber | 1994 | track 3 | IDM', 'tagSummary lists what it has',
+     F.tagSummary({ artist: 'Autechre', album: 'Amber', year: '1994', track: '3', genre: 'IDM' }));
+  // The brief form is what the status line says: no artist (it is the big text
+  // above), just where the track sits.
+  ok(F.tagSummary({ artist: 'Autechre', album: 'Amber', year: '1994', track: '3', genre: 'IDM' }, true) ===
+     'Amber · 1994', 'the brief summary drops artist, track and genre',
+     F.tagSummary({ artist: 'Autechre', album: 'Amber', year: '1994', track: '3', genre: 'IDM' }, true));
+  ok(F.tagSummary({ artist: 'Autechre', year: '1994' }, true) === '1994',
+     'the brief summary keeps the year alone');
+  ok(F.tagSummary({ artist: 'Autechre', track: '3', genre: 'IDM' }, true) === '',
+     'the brief summary can be empty even when tags exist');
+}
 
 console.log('\n--- time formatting ---');
 ok(F.fmt(0) === '0:00', 'zero');

@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 /* visualise — embedded cover art extractor tests.
 
-   extractEmbeddedArt lives inside index.html (the page is one file), so it is
-   pulled out of the real page by brace matching (tests/extract.js) — the same
-   code the browser runs, never a copy. Every input below is synthesised in
-   memory: nothing is downloaded and no audio file is needed. */
+   The extractor lives inside index.html (the page is one file), so it is pulled
+   out of the real page by brace matching (tests/extract.js) — the same code the
+   browser runs, never a copy. The page reads art and text tags in one pass
+   (parseMediaTags), so this suite looks at the art half of that; tests/file-tags
+   covers the other half. Every input below is synthesised in memory: nothing is
+   downloaded and no audio file is needed. */
 'use strict';
 const { readSource, extract } = require('./extract');
 const source = readSource();
-const extractEmbeddedArt = new Function('return ' + extract(source, 'extractEmbeddedArt') + ';')();
+const parseMediaTags = new Function('return ' + extract(source, 'parseMediaTags') + ';')();
+const extractEmbeddedArt = (bytes) => {
+  const parsed = parseMediaTags(bytes);
+  return parsed ? parsed.art : null;
+};
 
 var pass = 0, fail = 0;
 function ok(cond, label, extra) {

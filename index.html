@@ -507,8 +507,19 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
 (function () {
   'use strict';
   var BAR_COUNT = 48;
-  var SMOOTH_UP = 0.55;
-  var SMOOTH_DOWN = 0.12;
+  var SMOOTH_UP = 0.45;      // attack — how fast a bar rises
+  var SMOOTH_DOWN = 0.17;    // release — a little quicker than it was, so the
+                             // decay settles instead of crawling down
+  // Sensitivity and jitter are different knobs. BAND_BOOST lifts quiet bands
+  // (a curve, not a volume change: it is what "more sensitive" means when the
+  // loud parts already reach the top). BAND_BLEND mixes a bar with its
+  // neighbours, which takes the single-bin flicker out that reads as jitter —
+  // the calm has to come from there, because slowing the attack alone would
+  // just make the bars sit lower. Measured over 12 s of quiet verse / chorus /
+  // breakdown: quiet +10%, busy +3%, frame-to-frame movement -10%, neighbour
+  // roughness -23%, and nothing pinned at full height.
+  var BAND_BOOST = 0.70;
+  var BAND_BLEND = 0.40;
   var BEAT_COOLDOWN = 180;
   var RING_LIFE = 0.6;
 
@@ -546,6 +557,7 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
   var streamSource = null, captureStream = null, captureKind = null;
   var bins = null, waveArr = null;
   var displayed = new Float32Array(BAR_COUNT);
+  var rawBands = new Float32Array(BAR_COUNT);
   var peaks = new Float32Array(BAR_COUNT);
   var beatHistory = [], lastBeat = 0, ringT = Infinity;
   var mode = 'bars';
@@ -1124,12 +1136,14 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
     if (e.key === 'Enter') { e.preventDefault(); setIdentity(idInput.value); idInput.blur(); }
   });
 
-  // --- Embedded cover art -----------------------------------------------
-  // Reads APIC/PIC out of ID3v2, covr out of MP4/M4A and PICTURE out of FLAC
-  // straight from a dropped file: real art, offline, and readable pixels for
-  // the colour engine (a blob URL is never tainted). Ogg is deliberately not
-  // handled. Returns { mime, bytes } or null, and never throws.
-  function extractEmbeddedArt(bytes) {
+  // --- Tags out of a dropped file ---------------------------------------
+  // One pass over the container reads both the cover art (APIC/PIC in ID3v2,
+  // covr in MP4/M4A, PICTURE in FLAC) and the text tags — title, artist, album,
+  // year, track, genre — straight from the bytes. Real art and real track info,
+  // offline, and readable pixels for the colour engine (a blob URL is never
+  // tainted). Ogg is deliberately not handled. Returns
+  // { art: {mime, bytes} | null, tags } or null, and never throws.
+  function parseMediaTags(bytes) {
     'use strict';
 
     /* ------------------------------------------------------------------ */
@@ -1167,6 +1181,11 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
 
     function readU32(buf, off) {
       return ((buf[off] << 24) | (buf[off + 1] << 16) | (buf[off + 2] << 8) | buf[off + 3]) >>> 0;
+    }
+
+    // FLAC is the one container here that stores its sizes little-endian.
+    function readU32LE(buf, off) {
+      return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0;
     }
 
     function readU24(buf, off) {
@@ -1209,6 +1228,65 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
         if (buf[i] === 0) return i + 1;
       }
       return -1;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* text decoding + the tag store                                       */
+    /* ------------------------------------------------------------------ */
+
+    function decodeText(buf, start, end, label) {
+      if (end <= start) return '';
+      if (typeof TextDecoder === 'function') {
+        try {
+          return new TextDecoder(label, { fatal: false })
+            .decode(buf.subarray(start, end)).replace(/\uFEFF/g, '');
+        } catch (e) { /* unknown label: fall through */ }
+      }
+      return latin1(buf, start, end);
+    }
+
+    // Tag values end up in the UI, so drop NULs and control bytes, collapse
+    // whitespace, and cap the length: a corrupt tag must not flood the page.
+    function cleanTag(s) {
+      if (!s) return '';
+      s = String(s).replace(/\u0000/g, ' ')
+        .replace(/[\u0001-\u0008\u000b-\u001f\u007f]/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/^ +| +$/g, '');
+      return s.length > 300 ? s.slice(0, 300) : s;
+    }
+
+    function setTag(tags, key, value) {
+      var v = cleanTag(value);
+      if (v && !tags[key]) tags[key] = v;   // first value wins
+    }
+
+    // ID3 text frames are "encoding byte, then text"; UTF-16 carries a BOM.
+    function id3Text(buf, start, end) {
+      if (start >= end) return '';
+      var enc = buf[start];
+      var from = start + 1;
+      var label = 'iso-8859-1';
+      if (enc === 1) {
+        label = 'utf-16le';
+        if (end - from >= 2 && buf[from] === 0xfe && buf[from + 1] === 0xff) {
+          label = 'utf-16be'; from += 2;
+        } else if (end - from >= 2 && buf[from] === 0xff && buf[from + 1] === 0xfe) {
+          from += 2;
+        }
+      } else if (enc === 2) {
+        label = 'utf-16be';
+      } else if (enc === 3) {
+        label = 'utf-8';
+      }
+      // v2.4 allows NUL-separated multiple values: keep them, one line.
+      var parts = decodeText(buf, from, end, label).split('\u0000');
+      var out = [];
+      for (var i = 0; i < parts.length; i++) {
+        var v = cleanTag(parts[i]);
+        if (v) out.push(v);
+      }
+      return out.join(', ');
     }
 
     /* ------------------------------------------------------------------ */
@@ -1335,7 +1413,18 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       return end;
     }
 
-    function tryId3(buf) {
+    // ID3v2.3/2.4 frame ids, with the ID3v2.2 three-letter spellings.
+    var ID3_KEYS = {
+      TIT2: 'title', TT2: 'title',
+      TPE1: 'artist', TP1: 'artist',
+      TALB: 'album', TAL: 'album',
+      TPE2: 'albumArtist', TP2: 'albumArtist',
+      TRCK: 'track', TRK: 'track',
+      TDRC: 'year', TYER: 'year', TYE: 'year',
+      TCON: 'genre', TCO: 'genre'
+    };
+
+    function tryId3(buf, tags) {
       if (buf.length < 10) return null;
       if (!startsWithAscii(buf, 0, 'ID3')) return null;
       var major = buf[3];
@@ -1386,6 +1475,12 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
 
         if (major !== 2 && id === 'APIC') apicV23(body, dataStart, dataEnd, cands);
         else if (major === 2 && id === 'PIC') picV22(body, dataStart, dataEnd, cands);
+        else if (ID3_KEYS[id]) {
+          var value = id3Text(body, dataStart, dataEnd);
+          if (ID3_KEYS[id] === 'track') value = value.replace(/\/.*$/, '');   // "3/12" → 3
+          if (ID3_KEYS[id] === 'year') value = value.slice(0, 4);             // ISO date → year
+          setTag(tags, ID3_KEYS[id], value);
+        }
 
         pos = dataEnd;
       }
@@ -1415,7 +1510,46 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       addCandidate(cands, buf, p, p + dataLen, mime, pictureType);
     }
 
-    function tryFlac(buf, base) {
+    // Vorbis comment keys → our keys. FLAC is the only container here whose
+    // comment block is little-endian: a length-prefixed vendor string, a count,
+    // then length-prefixed "KEY=value" pairs.
+    var VORBIS_KEYS = {
+      TITLE: 'title', ARTIST: 'artist', ALBUM: 'album',
+      ALBUMARTIST: 'albumArtist', ALBUM_ARTIST: 'albumArtist', BAND: 'albumArtist',
+      DATE: 'year', YEAR: 'year', ORIGINALDATE: 'year',
+      TRACKNUMBER: 'track', TRACK: 'track', GENRE: 'genre'
+    };
+
+    function vorbisComments(buf, start, end, tags) {
+      var vendor = readU32LE(buf, start);
+      var p = start + 4;
+      if (p + vendor + 4 > end) return;
+      p += vendor;
+      var count = readU32LE(buf, p); p += 4;
+      if (count > 4096) return;                       // nonsense guard
+      for (var i = 0; i < count && p + 4 <= end; i++) {
+        var len = readU32LE(buf, p); p += 4;
+        if (len === 0 || p + len > end) return;
+        var line = decodeText(buf, p, p + len, 'utf-8');
+        p += len;
+        var eq = line.indexOf('=');
+        if (eq <= 0) continue;
+        var key = VORBIS_KEYS[line.slice(0, eq).replace(/^ +| +$/g, '').toUpperCase()];
+        if (!key) continue;
+        var value = line.slice(eq + 1);
+        if (key === 'track') value = value.replace(/\/.*$/, '');
+        if (key === 'year') value = value.slice(0, 4);
+        // Several ARTIST lines are normal in FLAC and all of them are credits.
+        if (key === 'artist' && tags.artist) {
+          var extra = cleanTag(value);
+          if (extra && tags.artist.indexOf(extra) === -1) tags.artist = cleanTag(tags.artist + ', ' + extra);
+          continue;
+        }
+        setTag(tags, key, value);
+      }
+    }
+
+    function tryFlac(buf, base, tags) {
       if (base + 4 > buf.length) return null;
       if (!startsWithAscii(buf, base, 'fLaC')) return null;
       var pos = base + 4;
@@ -1431,6 +1565,7 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
         if (type === 127) break; // invalid
         if (bodyEnd > buf.length) break; // truncated
         if (type === 6) flacPicture(buf, bodyStart, bodyEnd, cands);
+        else if (type === 4) vorbisComments(buf, bodyStart, bodyEnd, tags);
         pos = bodyEnd;
         if (last) break;
       }
@@ -1487,52 +1622,112 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       }
     }
 
-    function walkIlst(buf, start, limit, cands) {
+    // ilst entry names → our keys. `©` is byte 0xA9, escaped here so the source
+    // does not depend on the file's encoding.
+    var MP4_KEYS = {
+      '\u00a9nam': 'title',
+      '\u00a9ART': 'artist',
+      '\u00a9alb': 'album',
+      'aART': 'albumArtist',
+      '\u00a9day': 'year',
+      '\u00a9gen': 'genre',
+      'trkn': 'track'
+    };
+
+    // An ilst entry holds one or more `data` atoms: 4 bytes of type (1 = UTF-8,
+    // 2 = UTF-16), 4 bytes of locale, then the payload.
+    function mp4Text(buf, start, limit) {
+      var pos = start, guard = 0, out = '';
+      while (pos + 8 <= limit && guard++ < 64) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        if (box.type === 'data' && box.end - box.dataStart >= 8) {
+          var code = readU32(buf, box.dataStart) & 0xffffff;
+          if (code === 1 || code === 2) {
+            var value = cleanTag(decodeText(buf, box.dataStart + 8, box.end,
+                                            code === 2 ? 'utf-16be' : 'utf-8'));
+            if (value) out = out ? out + ', ' + value : value;
+          }
+        }
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+      return out;
+    }
+
+    // trkn / disk are binary: 2 zero bytes, the number, the total, then 2 more.
+    function mp4Number(buf, start, limit) {
+      var pos = start, guard = 0;
+      while (pos + 8 <= limit && guard++ < 8) {
+        var box = boxAt(buf, pos, limit);
+        if (!box) break;
+        var p = box.dataStart + 8;
+        if (box.type === 'data' && box.end - p >= 4) {
+          var n = (buf[p + 2] << 8) | buf[p + 3];
+          var total = box.end - p >= 6 ? ((buf[p + 4] << 8) | buf[p + 5]) : 0;
+          if (n > 0) return total > 0 ? n + '/' + total : String(n);
+        }
+        if (box.end <= pos) break;
+        pos = box.end;
+      }
+      return '';
+    }
+
+    function walkIlst(buf, start, limit, cands, tags) {
       var pos = start, guard = 0;
       while (pos + 8 <= limit && guard++ < 100000) {
         var box = boxAt(buf, pos, limit);
         if (!box) break;
-        if (box.type === 'covr') walkCovr(buf, box.dataStart, box.end, cands);
+        if (box.type === 'covr') {
+          walkCovr(buf, box.dataStart, box.end, cands);
+        } else if (MP4_KEYS[box.type]) {
+          var key = MP4_KEYS[box.type];
+          var value = key === 'track' ? mp4Number(buf, box.dataStart, box.end)
+                                      : mp4Text(buf, box.dataStart, box.end);
+          if (key === 'year') value = value.slice(0, 4);
+          if (key === 'track') value = value.replace(/\/.*$/, '');
+          setTag(tags, key, value);
+        }
         if (box.end <= pos) break;
         pos = box.end;
       }
     }
 
-    function walkMeta(buf, start, limit, cands) {
+    function walkMeta(buf, start, limit, cands, tags) {
       var pos = start, guard = 0;
       while (pos + 8 <= limit && guard++ < 100000) {
         var box = boxAt(buf, pos, limit);
         if (!box) break;
-        if (box.type === 'ilst') walkIlst(buf, box.dataStart, box.end, cands);
+        if (box.type === 'ilst') walkIlst(buf, box.dataStart, box.end, cands, tags);
         if (box.end <= pos) break;
         pos = box.end;
       }
     }
 
-    function walkUdta(buf, start, limit, cands) {
+    function walkUdta(buf, start, limit, cands, tags) {
       var pos = start, guard = 0;
       while (pos + 8 <= limit && guard++ < 100000) {
         var box = boxAt(buf, pos, limit);
         if (!box) break;
         // 'meta' is a full box: 4 bytes of version/flags precede its children.
-        if (box.type === 'meta') walkMeta(buf, box.dataStart + 4, box.end, cands);
+        if (box.type === 'meta') walkMeta(buf, box.dataStart + 4, box.end, cands, tags);
         if (box.end <= pos) break;
         pos = box.end;
       }
     }
 
-    function walkMoov(buf, start, limit, cands) {
+    function walkMoov(buf, start, limit, cands, tags) {
       var pos = start, guard = 0;
       while (pos + 8 <= limit && guard++ < 100000) {
         var box = boxAt(buf, pos, limit);
         if (!box) break;
-        if (box.type === 'udta') walkUdta(buf, box.dataStart, box.end, cands);
+        if (box.type === 'udta') walkUdta(buf, box.dataStart, box.end, cands, tags);
         if (box.end <= pos) break;
         pos = box.end;
       }
     }
 
-    function tryMp4(buf) {
+    function tryMp4(buf, tags) {
       if (buf.length < 8) return null;
       // Only attempt an atom walk when the file plausibly is an MP4 container.
       if (!KNOWN_TOP[latin1(buf, 4, 8)]) return null;
@@ -1541,7 +1736,7 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       while (pos + 8 <= buf.length && guard++ < 100000) {
         var box = boxAt(buf, pos, buf.length);
         if (!box) break;
-        if (box.type === 'moov') walkMoov(buf, box.dataStart, box.end, cands);
+        if (box.type === 'moov') walkMoov(buf, box.dataStart, box.end, cands, tags);
         if (box.end <= pos) break;
         pos = box.end;
       }
@@ -1555,48 +1750,100 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
     try {
       var u8 = normalise(bytes);
       if (!u8) return null;
+      var tags = {};
 
       if (startsWithAscii(u8, 0, 'ID3')) {
-        var fromId3 = tryId3(u8);
-        if (fromId3) return fromId3;
+        var fromId3 = tryId3(u8, tags);
+        if (fromId3) return { art: fromId3, tags: tags };
         // An ID3 tag may be prepended to a FLAC stream.
         var afterTag = id3TagEnd(u8);
         if (afterTag > 0 && afterTag < u8.length) {
-          var flacAfterId3 = tryFlac(u8, afterTag);
-          if (flacAfterId3) return flacAfterId3;
+          var flacAfterId3 = tryFlac(u8, afterTag, tags);
+          if (flacAfterId3) return { art: flacAfterId3, tags: tags };
         }
-        return null;
+        return { art: null, tags: tags };
       }
 
       if (startsWithAscii(u8, 0, 'fLaC')) {
-        return tryFlac(u8, 0);
+        return { art: tryFlac(u8, 0, tags), tags: tags };
       }
 
       // Ogg Vorbis/Opus is intentionally unsupported (see file header).
-      var fromMp4 = tryMp4(u8);
-      if (fromMp4) return fromMp4;
-
-      return null;
+      return { art: tryMp4(u8, tags), tags: tags };
     } catch (e) {
       return null;
     }
   }
 
   // --- File fallback (drag & drop anywhere) -----------------------------
-  // Silent, no button: the page is about capturing what is already playing,
-  // but a dropped file still works — and its embedded cover art is read
-  // straight out of the file, so the colour drench works offline too.
-  function fileArt(file) {
-    // Whole file for normal sizes (MP4 keeps its tag at either end), a prefix
-    // for big ones. Never throws: a file with no art just returns null.
+  // Silent, no button: the page is about capturing what is already playing, but
+  // a dropped file still works, and its own tags and cover art are read
+  // straight out of the bytes — so an offline drop gets the real track name and
+  // the colour drench, with no lookup at all.
+  function fileMeta(file) {
+    // Whole file for normal sizes (MP4 keeps its tags at either end), a prefix
+    // for big ones. Never throws: a file with no tags just returns empties.
     var slice = file.size <= 32 * 1024 * 1024 ? file : file.slice(0, 16 * 1024 * 1024);
     return slice.arrayBuffer().then(function (buf) {
-      var got = extractEmbeddedArt(new Uint8Array(buf));
-      if (!got || !got.bytes) return null;
-      if (artObjectUrl) URL.revokeObjectURL(artObjectUrl);
-      artObjectUrl = URL.createObjectURL(new Blob([got.bytes], { type: got.mime }));
-      return artObjectUrl;
-    }).catch(function () { return null; });
+      var parsed = parseMediaTags(new Uint8Array(buf));
+      if (!parsed) return { art: null, tags: null };
+      var artUrl = null;
+      if (parsed.art && parsed.art.bytes) {
+        if (artObjectUrl) URL.revokeObjectURL(artObjectUrl);
+        artObjectUrl = URL.createObjectURL(new Blob([parsed.art.bytes], { type: parsed.art.mime }));
+        artUrl = artObjectUrl;
+      }
+      return { art: artUrl, tags: parsed.tags };
+    }).catch(function () { return { art: null, tags: null }; });
+  }
+
+  // A dropped file's own tags beat the "Artist - Title.mp3" filename guess.
+  // Without an artist tag a title tag is still a better credit than the
+  // filename, and "Local file" is not a credit at all.
+  function mergeFileNames(fromName, tags) {
+    var t = tags || {};
+    return {
+      title: t.title || fromName.title,
+      artist: t.artist || (t.title ? '' : (fromName.artist === 'Local file' ? '' : fromName.artist)),
+      fromTags: !!(t.title || t.artist)
+    };
+  }
+
+  // One line of "what the file said". The brief form is for the status line,
+  // which is narrow and already shows the artist as the big text, so album and
+  // year are what is left to say; the full form feeds the debug field.
+  function tagSummary(tags, brief) {
+    if (!tags) return '';
+    if (brief) {
+      var short = [];
+      if (tags.album) short.push(tags.album);
+      if (tags.year) short.push(tags.year);
+      return short.join(' · ');
+    }
+    var bits = [];
+    if (tags.artist) bits.push(tags.artist);
+    if (tags.album) bits.push(tags.album);
+    if (tags.year) bits.push(tags.year);
+    if (tags.track) bits.push('track ' + tags.track);
+    if (tags.genre) bits.push(tags.genre);
+    return bits.join(' | ');
+  }
+
+  function applyFileIdentity(names, file, tags) {
+    identity = { artist: names.artist, title: names.title, bare: !names.artist };
+    titleEl.textContent = names.title;
+    artistEl.textContent = names.artist;
+    marquee();
+    updateLinks(names.artist, names.title);
+    if (!file) return;
+    var full = tagSummary(tags), brief = tagSummary(tags, true);
+    if (names.fromTags) {
+      setStatus('local file · tags: ' + (brief || 'title and artist'));
+    } else if (full) {
+      setStatus('local file · ' + file.name + ' — no title/artist tag (' + (brief || full) + ')');
+    } else {
+      setStatus('local file · ' + file.name + ' — no tags, named from the filename');
+    }
   }
 
   function loadFile(file) {
@@ -1610,12 +1857,9 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       if (objectUrl) URL.revokeObjectURL(objectUrl);
       objectUrl = URL.createObjectURL(file);
       player.src = objectUrl;
-      var names = parseName(file.name);
-      identity = { artist: names.artist, title: names.title, bare: names.artist === 'Local file' };
-      titleEl.textContent = names.title;
-      artistEl.textContent = names.artist === 'Local file' ? '' : names.artist;
-      marquee();
-      updateLinks(names.artist, names.title);
+      // The filename is the first guess, so the name is up immediately; the
+      // file's own tags correct it as soon as the bytes have been read.
+      applyFileIdentity(mergeFileNames(parseName(file.name), null), file, null);
       seekRow.classList.remove('off');
       idRow.classList.add('off');
       artFrame.dataset.hasArt = 'false';
@@ -1623,14 +1867,23 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       clearCoverColour();
       enterArt();
       var seq = ++artSeq;
-      fileArt(file).then(function (blobUrl) {
+      fileMeta(file).then(function (meta) {
         if (seq !== artSeq) return;
-        if (blobUrl) loadArt(blobUrl, seq);
-        else identify(names.artist, names.title, seq);
+        var names = mergeFileNames(parseName(file.name), meta.tags);
+        if (names.fromTags) applyFileIdentity(names, file, meta.tags);
+        // Mirror it in the debug field on every load, so a previous file's tags
+        // never look like this file's.
+        if (DEBUG) {
+          window.__viz.tags = tagSummary(meta.tags) ||
+            (names.fromTags ? '(title/artist only)' : '(none)');
+        }
+        // The file's own art wins; with no art, a real name is worth a lookup
+        // (and a bare title gets its artist filled in from the match).
+        if (meta.art) loadArt(meta.art, seq);
+        else if (names.title) identify(names.artist, names.title, seq);
       });
       player.play().catch(function () {});
       updatePrimary();
-      setStatus('local file · ' + file.name);
     });
   }
   function toggleFile() {
@@ -1761,6 +2014,20 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
     return m / 255;
   }
 
+  // Sample every band once per frame, then read them back blended: the mixing
+  // has to happen on the raw spectrum, because blending the eased values would
+  // smear the attack it is meant to keep.
+  function sampleBands() {
+    for (var i = 0; i < BAR_COUNT; i++) rawBands[i] = bandValue(i, analyser.frequencyBinCount);
+  }
+
+  function smoothedBand(i) {
+    var c = rawBands[i];
+    var l = i > 0 ? rawBands[i - 1] : c;
+    var r = i < BAR_COUNT - 1 ? rawBands[i + 1] : c;
+    return c * (1 - BAND_BLEND) + ((l + r) / 2) * BAND_BLEND;
+  }
+
   function detectBeat(now) {
     var bass = 0;
     for (var i = 0; i < 12; i++) bass += bins[i];
@@ -1795,8 +2062,9 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
     var gap = 3;
     var barW = Math.max(2, (w - gap * (BAR_COUNT - 1)) / BAR_COUNT);
     var maxH = h - 24;
+    sampleBands();
     for (var i = 0; i < BAR_COUNT; i++) {
-      var target = Math.pow(bandValue(i, analyser.frequencyBinCount), 0.85);
+      var target = Math.pow(smoothedBand(i), BAND_BOOST);
       displayed[i] += (target - displayed[i]) * (target > displayed[i] ? SMOOTH_UP : SMOOTH_DOWN);
       var level = displayed[i];
       if (level >= peaks[i]) peaks[i] = level;
@@ -1858,7 +2126,7 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
   }
 
   // Debug hook for headless verification (also handy in the console).
-  window.__viz = { frames: 0, level: 0, source: 'idle', lookup: '-' };
+  window.__viz = { frames: 0, level: 0, source: 'idle', lookup: '-', tags: '-' };
   function debugReport() {
     var cs = getComputedStyle(document.documentElement);
     document.documentElement.dataset.viz =
@@ -1872,6 +2140,7 @@ anywhere to play it locally · <kbd>▶</kbd> captures what's playing — in Chr
       ';bg=' + cs.getPropertyValue('--page-bg').trim() +
       ';ink=' + cs.getPropertyValue('--page-ink').trim() +
       ';lookup=' + window.__viz.lookup +
+      ';tags=' + window.__viz.tags +
       ';status=' + statusEl.textContent.slice(0, 60) +
       ';title=' + titleEl.textContent.slice(0, 30);
   }
